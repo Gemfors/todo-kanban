@@ -2,62 +2,71 @@
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
   <title>Todo Kanban</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="app">
     <div class="top-area">
-        <h2>Today Board</h2>
-        <p class="helper-text">Click a card to move it to the next step, or drag it anywhere you want.</p>
-
-        <div class="board">
-            <div class="column drop-zone" id="todo-column">
-                <h3>To Do</h3>
-                </div>
-
-                <div class="column drop-zone" id="doing-column">
-                <h3>Doing</h3>
-                </div>
-
-                <div class="column drop-zone" id="done-column">
-                <h3>Done</h3>
-            </div>
+      <div class="board-header">
+        <div>
+          <h2>Today Board</h2>
+          <p class="helper-text">Click a card to move it to the next step, double-click to edit it, or drag it anywhere you want. Press <kbd>?</kbd> for shortcuts.</p>
         </div>
+        <div class="board-actions">
+          <button id="archive-button" type="button" title="Archived tasks">Archive</button>
+          <button id="shortcuts-button" type="button" title="Keyboard shortcuts (?)">?</button>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="column drop-zone" data-column="todo">
+          <div class="column-header">
+            <h3>To Do</h3>
+            <span class="column-count"></span>
+          </div>
+          <div class="card-list"></div>
+        </div>
+
+        <div class="column drop-zone" data-column="doing">
+          <div class="column-header">
+            <h3>Doing</h3>
+            <span class="column-count"></span>
+          </div>
+          <div class="card-list"></div>
+        </div>
+
+        <div class="column drop-zone" data-column="done">
+          <div class="column-header">
+            <h3>Done</h3>
+            <span class="column-count"></span>
+            <button id="clear-done-button" class="clear-done-button" type="button" title="Move all Done tasks to the archive">Clear</button>
+          </div>
+          <div class="card-list"></div>
+        </div>
+      </div>
     </div>
 
     <div class="bottom-area">
+      <div class="taskpool-header">
+        <h2>Task Pool</h2>
 
-        <div class="taskpool-header">
-            <h2>Task Pool</h2>
-
-            <div class="new-project-area">
-                <input id="new-project-input" type="text" placeholder="New project name">
-                <button id="add-project-button">Add Project</button>
-            </div>
+        <div class="new-project-area">
+          <input id="new-project-input" type="text" placeholder="New project name">
+          <button id="add-project-button" type="button">Add Project</button>
         </div>
+      </div>
 
-        <div class="projects-row">
-            <div class="project-section drop-zone">
-                <h3>Work</h3>
-
-                <div class="project-task-input-area">
-                <input class="project-task-input" type="text" placeholder="Type a new task">
-                <button class="project-add-task-button">Add Task</button>
-                </div>
-            </div>
-
-            <div class="project-section drop-zone">
-                <h3>Presentations</h3>
-
-                <div class="project-task-input-area">
-                <input class="project-task-input" type="text" placeholder="Type a new task">
-                <button class="project-add-task-button">Add Task</button>
-                </div>
-            </div>
-        </div>
+      <div class="projects-row"></div>
     </div>
   </div>
+
+  <div id="toast" class="toast" hidden>
+    <span class="toast-message"></span>
+    <button class="toast-undo" type="button">Undo</button>
+  </div>
+
   <script src="script.js"></script>
 </body>
 </html>

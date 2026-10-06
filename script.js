@@ -1,473 +1,821 @@
-const todoColumn = document.querySelector('#todo-column');
-const doingColumn = document.querySelector('#doing-column');
-const doneColumn = document.querySelector('#done-column');
+'use strict';
+
+/*
+ * Todo Kanban – renderer
+ *
+ * All data lives in one `state` object. Every change goes through commit(),
+ * which saves and re-renders the whole UI from that state. Tasks point to
+ * their project by id, so renaming a project never disconnects its tasks.
+ */
+
+const DEFAULT_COLOR = '#4f46e5';
+const BOARD_COLUMNS = ['todo', 'doing', 'done'];
+const ALL_COLUMNS = ['pool', ...BOARD_COLUMNS];
+const COLUMN_LABELS = { pool: 'Task Pool', todo: 'To Do', doing: 'Doing', done: 'Done' };
+const NEXT_STEP = { pool: 'todo', todo: 'doing', doing: 'done', done: 'pool' };
+const PREVIOUS_STEP = { todo: 'pool', doing: 'todo', done: 'doing' };
+const MAX_UNDO = 50;
+const CLICK_DELAY_MS = 220;
+const FALLBACK_STORAGE_KEY = 'kanban-data-v2';
+
+const storage = window.kanbanStorage || null;
+
+let state = emptyState();
+let undoStack = [];
+let redoStack = [];
+let lastProjectId = null;
+
+let draggedTaskId = null;
+let draggedProjectSection = null;
+let lastDragEndAt = 0;
+let pendingClickTimer = null;
+let currentModal = null;
+let saveFailed = false;
+let savingBlocked = false; // set if the data file could not be read, so we never overwrite it
+
+const projectsRow = document.querySelector('.projects-row');
 const newProjectInput = document.querySelector('#new-project-input');
 const addProjectButton = document.querySelector('#add-project-button');
+const clearDoneButton = document.querySelector('#clear-done-button');
+const archiveButton = document.querySelector('#archive-button');
+const shortcutsButton = document.querySelector('#shortcuts-button');
+const toastEl = document.querySelector('#toast');
+const toastMessage = toastEl.querySelector('.toast-message');
+const toastUndo = toastEl.querySelector('.toast-undo');
 
-let draggedCard = null;
-let draggedProject = null;
-let justDragged = false;
+const boardColumns = {};
+document.querySelectorAll('.column[data-column]').forEach(column => {
+  boardColumns[column.dataset.column] = {
+    zone: column,
+    list: column.querySelector('.card-list'),
+    count: column.querySelector('.column-count')
+  };
+});
 
-function getProjectSection(projectName) {
-  const projectSections = document.querySelectorAll('.project-section');
+/* ================= Helpers ================= */
 
-  for (const section of projectSections) {
-    const heading = section.querySelector('h3');
-    if (heading && heading.textContent === projectName) {
-      return section;
-    }
-  }
-
-  return document.querySelector('.project-section');
+function emptyState() {
+  return { version: 2, projects: [], tasks: [], archive: [] };
 }
 
-function getProjectColor(projectName) {
-  const projectSection = getProjectSection(projectName);
-
-  if (!projectSection) {
-    return '#4f46e5';
+function uid() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
   }
-
-  const colorPicker = projectSection.querySelector('.project-color-picker');
-
-  if (!colorPicker) {
-    return '#4f46e5';
-  }
-
-  return colorPicker.value || '#4f46e5';
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 }
 
-function updateTaskColor(card) {
-  const colorDot = card.querySelector('.task-color-dot');
-
-  if (!colorDot) {
-    return;
-  }
-
-  const projectName = card.dataset.project || 'Work';
-  colorDot.style.background = getProjectColor(projectName);
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
-function updateAllTasksForProject(projectName) {
-  document.querySelectorAll('.task-card').forEach(card => {
-    if ((card.dataset.project || 'Work') === projectName) {
-      updateTaskColor(card);
-    }
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function isColor(value) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function getProject(id) {
+  return state.projects.find(project => project.id === id) || null;
+}
+
+function getTask(id) {
+  return state.tasks.find(task => task.id === id) || null;
+}
+
+function projectColor(id) {
+  const project = getProject(id);
+  return (project && project.color) || DEFAULT_COLOR;
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function make(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function isTypingTarget(target) {
+  if (!target || !target.tagName) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === 'textarea' || tag === 'select' || target.isContentEditable ||
+    (tag === 'input' && !['button', 'checkbox', 'radio', 'color'].includes(target.type));
+}
+
+/* ================= Data: load, migrate, save ================= */
+
+// Accepts the current format, an imported backup, or the old localStorage format
+// (projects by name, tasks with a `project` name) and returns clean v2 data.
+function normalizeData(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const data = emptyState();
+  const projectIds = new Set();
+  const projectsByName = new Map();
+  const usedTaskIds = new Set();
+
+  function addProject(name, extra = {}) {
+    const cleanName = String(name || '').trim() || 'Untitled';
+    const id = extra.id && !projectIds.has(String(extra.id)) ? String(extra.id) : uid();
+    const project = {
+      id,
+      name: cleanName,
+      color: isColor(extra.color) ? extra.color : DEFAULT_COLOR,
+      collapsed: Boolean(extra.collapsed)
+    };
+    data.projects.push(project);
+    projectIds.add(id);
+    if (!projectsByName.has(cleanName)) projectsByName.set(cleanName, project);
+    return project;
+  }
+
+  (Array.isArray(raw.projects) ? raw.projects : []).forEach(project => {
+    if (project && typeof project === 'object') addProject(project.name, project);
+  });
+
+  function resolveProjectId(task) {
+    if (task.projectId && projectIds.has(String(task.projectId))) return String(task.projectId);
+
+    const name = typeof task.project === 'string' ? task.project.trim() : '';
+    if (name) return (projectsByName.get(name) || addProject(name)).id;
+
+    return (data.projects[0] || addProject('Work')).id;
+  }
+
+  function taskId(task) {
+    const id = task.id && !usedTaskIds.has(String(task.id)) ? String(task.id) : uid();
+    usedTaskIds.add(id);
+    return id;
+  }
+
+  (Array.isArray(raw.tasks) ? raw.tasks : []).forEach(task => {
+    if (!task || typeof task !== 'object') return;
+    const text = String(task.text ?? '').trim();
+    if (!text) return;
+
+    data.tasks.push({
+      id: taskId(task),
+      text,
+      notes: typeof task.notes === 'string' ? task.notes : '',
+      projectId: resolveProjectId(task),
+      column: ALL_COLUMNS.includes(task.column) ? task.column : 'pool',
+      createdAt: task.createdAt || nowIso(),
+      updatedAt: task.updatedAt || task.createdAt || nowIso()
+    });
+  });
+
+  (Array.isArray(raw.archive) ? raw.archive : []).forEach(task => {
+    if (!task || typeof task !== 'object') return;
+    const text = String(task.text ?? '').trim();
+    if (!text) return;
+
+    data.archive.push({
+      id: taskId(task),
+      text,
+      notes: typeof task.notes === 'string' ? task.notes : '',
+      projectId: task.projectId ? String(task.projectId) : '',
+      projectName: typeof task.projectName === 'string' ? task.projectName : '',
+      createdAt: task.createdAt || nowIso(),
+      archivedAt: task.archivedAt || nowIso()
+    });
+  });
+
+  if (data.projects.length === 0) addProject('Work');
+
+  return data;
+}
+
+function readLegacyLocalStorage() {
+  try {
+    const tasks = localStorage.getItem('tasks');
+    const projects = localStorage.getItem('projects');
+    if (!tasks && !projects) return null;
+    return {
+      tasks: tasks ? JSON.parse(tasks) : [],
+      projects: projects ? JSON.parse(projects) : []
+    };
+  } catch (err) {
+    console.error('Could not read old localStorage data', err);
+    return null;
+  }
+}
+
+function defaultData() {
+  return normalizeData({
+    projects: [
+      { name: 'Work', color: DEFAULT_COLOR },
+      { name: 'Presentations', color: '#0ea5e9' }
+    ],
+    tasks: [
+      { text: 'Fix login bug', column: 'pool', project: 'Work' },
+      { text: 'Write project proposal', column: 'pool', project: 'Work' },
+      { text: 'Prepare slides', column: 'pool', project: 'Presentations' }
+    ]
   });
 }
 
-function getCardProjectName(card) {
-  const projectSection = card.closest('.project-section');
-  if (!projectSection) {
-    return card.dataset.project || '';
-  }
-
-  const heading = projectSection.querySelector('h3');
-  return heading ? heading.textContent : '';
+async function loadRawData() {
+  if (storage) return storage.load();
+  const saved = localStorage.getItem(FALLBACK_STORAGE_KEY);
+  return saved ? JSON.parse(saved) : null;
 }
 
-function getCardColumn(card) {
-  if (card.parentElement === todoColumn) {
-    return 'todo';
+function save() {
+  if (savingBlocked) return;
+  const data = clone(state);
+
+  if (!storage) {
+    try {
+      localStorage.setItem(FALLBACK_STORAGE_KEY, JSON.stringify(data));
+    } catch (err) {
+      reportSaveError(err);
+    }
+    return;
   }
 
-  if (card.parentElement === doingColumn) {
-    return 'doing';
-  }
-
-  if (card.parentElement === doneColumn) {
-    return 'done';
-  }
-
-  return 'pool';
+  storage.save(data).then(() => {
+    if (saveFailed) {
+      saveFailed = false;
+      showToast('Saved again — all good.');
+    }
+  }).catch(reportSaveError);
 }
 
-function moveCardToNextStep(card) {
-  if (card.parentElement === todoColumn) {
-    doingColumn.appendChild(card);
-  } else if (card.parentElement === doingColumn) {
-    doneColumn.appendChild(card);
-  } else if (card.parentElement === doneColumn) {
-    const projectName = card.dataset.project || 'Work';
-    const projectSection = getProjectSection(projectName);
-    projectSection.appendChild(card);
+function reportSaveError(err) {
+  saveFailed = true;
+  console.error('Save failed', err);
+  showToast(`Could not save your changes: ${err && err.message ? err.message : err}`, { sticky: true });
+}
+
+/* ================= Commit / undo ================= */
+
+function commit(mutate, { undoable = true, toast = null } = {}) {
+  const before = clone(state);
+  const result = mutate();
+  if (result === false) return;
+
+  if (undoable) {
+    undoStack.push(before);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
+    redoStack = [];
+  }
+
+  save();
+  render();
+
+  if (toast) {
+    showToast(toast, { undo: undoable });
+  } else if (undoable) {
+    hideToast();
+  }
+}
+
+// Collapsing a project is a view setting, so undo/redo keeps the current collapse state.
+function keepCurrentCollapse(snapshot) {
+  const collapsed = new Map(state.projects.map(project => [project.id, project.collapsed]));
+  snapshot.projects.forEach(project => {
+    if (collapsed.has(project.id)) project.collapsed = collapsed.get(project.id);
+  });
+  return snapshot;
+}
+
+function undo() {
+  if (undoStack.length === 0) {
+    showToast('Nothing to undo');
+    return;
+  }
+  redoStack.push(clone(state));
+  state = keepCurrentCollapse(undoStack.pop());
+  save();
+  render();
+  showToast('Undone');
+}
+
+function redo() {
+  if (redoStack.length === 0) {
+    showToast('Nothing to redo');
+    return;
+  }
+  undoStack.push(clone(state));
+  state = keepCurrentCollapse(redoStack.pop());
+  save();
+  render();
+  showToast('Redone');
+}
+
+/* ================= Mutations (call inside commit) ================= */
+
+function moveTask(taskId, column, { projectId = null, beforeTaskId = null } = {}) {
+  const index = state.tasks.findIndex(task => task.id === taskId);
+  if (index < 0) return false;
+
+  const [task] = state.tasks.splice(index, 1);
+  task.column = column;
+  if (projectId) task.projectId = projectId;
+  task.updatedAt = nowIso();
+
+  const beforeIndex = beforeTaskId ? state.tasks.findIndex(t => t.id === beforeTaskId) : -1;
+  if (beforeIndex < 0) {
+    state.tasks.push(task);
   } else {
-    card.dataset.project = getCardProjectName(card) || card.dataset.project || 'Work';
-    todoColumn.appendChild(card);
+    state.tasks.splice(beforeIndex, 0, task);
+  }
+  return true;
+}
+
+function stepTask(taskId, direction) {
+  const task = getTask(taskId);
+  if (!task) return false;
+  const target = direction > 0 ? NEXT_STEP[task.column] : PREVIOUS_STEP[task.column];
+  if (!target) return false;
+  return moveTask(taskId, target);
+}
+
+function addTask(projectId, text) {
+  state.tasks.push({
+    id: uid(),
+    text,
+    notes: '',
+    projectId,
+    column: 'pool',
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  });
+}
+
+function deleteTask(taskId) {
+  const task = getTask(taskId);
+  if (!task) return;
+  commit(() => {
+    state.tasks = state.tasks.filter(t => t.id !== taskId);
+  }, { toast: `Deleted “${task.text}”` });
+}
+
+function clearDone() {
+  const doneTasks = state.tasks.filter(task => task.column === 'done');
+  if (doneTasks.length === 0) return;
+
+  commit(() => {
+    const archivedAt = nowIso();
+    const archived = doneTasks.map(task => ({
+      id: task.id,
+      text: task.text,
+      notes: task.notes,
+      projectId: task.projectId,
+      projectName: getProject(task.projectId) ? getProject(task.projectId).name : '',
+      createdAt: task.createdAt,
+      archivedAt
+    }));
+    state.archive = [...archived, ...state.archive];
+    state.tasks = state.tasks.filter(task => task.column !== 'done');
+  }, { toast: `Archived ${doneTasks.length} ${doneTasks.length === 1 ? 'task' : 'tasks'}` });
+}
+
+function restoreFromArchive(archiveId) {
+  const item = state.archive.find(entry => entry.id === archiveId);
+  if (!item) return;
+
+  commit(() => {
+    let project = getProject(item.projectId) ||
+      state.projects.find(p => item.projectName && p.name === item.projectName);
+
+    // The project was deleted after archiving – bring it back so the task has a home.
+    if (!project) {
+      project = { id: uid(), name: item.projectName || 'Restored', color: DEFAULT_COLOR, collapsed: false };
+      state.projects.push(project);
+    }
+
+    state.archive = state.archive.filter(entry => entry.id !== archiveId);
+    state.tasks.push({
+      id: getTask(item.id) ? uid() : item.id,
+      text: item.text,
+      notes: item.notes || '',
+      projectId: project.id,
+      column: 'pool',
+      createdAt: item.createdAt || nowIso(),
+      updatedAt: nowIso()
+    });
+  }, { toast: `Restored “${item.text}” to ${COLUMN_LABELS.pool}` });
+}
+
+function deleteFromArchive(archiveId) {
+  const item = state.archive.find(entry => entry.id === archiveId);
+  if (!item) return;
+  commit(() => {
+    state.archive = state.archive.filter(entry => entry.id !== archiveId);
+  }, { toast: `Deleted “${item.text}” from the archive` });
+}
+
+async function emptyArchive() {
+  const count = state.archive.length;
+  if (count === 0) return;
+
+  const ok = await confirmDialog({
+    title: 'Empty the archive?',
+    message: `This permanently deletes ${count} archived ${count === 1 ? 'task' : 'tasks'}. You can still undo it right afterwards with Ctrl+Z.`,
+    confirmLabel: 'Empty archive',
+    danger: true
+  });
+  if (!ok) return;
+
+  commit(() => {
+    state.archive = [];
+  }, { toast: 'Archive emptied' });
+}
+
+function addProjectFromInput() {
+  const name = newProjectInput.value.trim();
+  if (name === '') return;
+
+  const id = uid();
+  commit(() => {
+    state.projects.push({ id, name, color: DEFAULT_COLOR, collapsed: false });
+  });
+  newProjectInput.value = '';
+  lastProjectId = id;
+  focusNewTaskInput(id);
+}
+
+async function deleteProject(projectId) {
+  const project = getProject(projectId);
+  if (!project) return;
+
+  const tasks = state.tasks.filter(task => task.projectId === projectId);
+  const onBoard = tasks.filter(task => task.column !== 'pool').length;
+
+  if (tasks.length > 0) {
+    let message = `This also deletes its ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'}`;
+    message += onBoard > 0 ? `, including ${onBoard} on the Today board.` : '.';
+
+    const ok = await confirmDialog({
+      title: `Delete “${project.name}”?`,
+      message,
+      confirmLabel: 'Delete project',
+      danger: true
+    });
+    if (!ok) return;
   }
 
-  saveTasks();
+  commit(() => {
+    state.projects = state.projects.filter(p => p.id !== projectId);
+    state.tasks = state.tasks.filter(task => task.projectId !== projectId);
+    if (state.projects.length === 0) {
+      state.projects.push({ id: uid(), name: 'Work', color: DEFAULT_COLOR, collapsed: false });
+    }
+  }, { toast: `Deleted project “${project.name}”` });
 }
 
-function saveTasks() {
-  const tasks = [];
+/* ================= Rendering ================= */
 
-  document.querySelectorAll('.task-card').forEach(card => {
-    tasks.push({
-      text: card.querySelector('.task-text').textContent,
-      column: getCardColumn(card),
-      project: getCardProjectName(card) || card.dataset.project || 'Work'
-    });
+function captureUi() {
+  const active = document.activeElement;
+  const drafts = {};
+  document.querySelectorAll('[data-draft-key]').forEach(input => {
+    if (input.value) drafts[input.dataset.draftKey] = input.value;
   });
 
-  localStorage.setItem('tasks', JSON.stringify(tasks));
+  return {
+    focusKey: active && active.dataset ? active.dataset.focusKey : null,
+    selection: active && typeof active.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd] : null,
+    drafts,
+    rowScroll: [projectsRow.scrollLeft, projectsRow.scrollTop]
+  };
 }
 
-function saveProjects() {
-  const projects = [];
-
-  document.querySelectorAll('.project-section').forEach(section => {
-    const heading = section.querySelector('h3');
-    const colorPicker = section.querySelector('.project-color-picker');
-
-    projects.push({
-      name: heading.textContent,
-      collapsed: section.classList.contains('collapsed'),
-      color: colorPicker ? colorPicker.value : '#4f46e5'
-    });
+function restoreUi(snapshot) {
+  Object.entries(snapshot.drafts).forEach(([key, value]) => {
+    const input = document.querySelector(`[data-draft-key="${CSS.escape(key)}"]`);
+    if (input) input.value = value;
   });
 
-  localStorage.setItem('projects', JSON.stringify(projects));
+  projectsRow.scrollLeft = snapshot.rowScroll[0];
+  projectsRow.scrollTop = snapshot.rowScroll[1];
+
+  if (snapshot.focusKey && !currentModal) {
+    const target = document.querySelector(`[data-focus-key="${CSS.escape(snapshot.focusKey)}"]`);
+    if (target) {
+      target.focus({ preventScroll: true });
+      if (snapshot.selection && typeof target.setSelectionRange === 'function') {
+        try {
+          target.setSelectionRange(snapshot.selection[0], snapshot.selection[1]);
+        } catch {
+          /* not a text input */
+        }
+      }
+    }
+  }
 }
 
-function loadProjects() {
-  const savedProjects = localStorage.getItem('projects');
+function render() {
+  const ui = captureUi();
+  renderBoard();
+  renderProjects();
+  renderArchiveButton();
+  if (currentModal && currentModal.kind === 'archive') renderArchiveList(currentModal);
+  restoreUi(ui);
+}
 
-  if (!savedProjects) {
-    saveProjects();
-    return;
+function renderBoard() {
+  BOARD_COLUMNS.forEach(column => {
+    const { list, count } = boardColumns[column];
+    const tasks = state.tasks.filter(task => task.column === column);
+    list.replaceChildren(...tasks.map(createCard));
+    count.textContent = tasks.length ? String(tasks.length) : '';
+  });
+
+  clearDoneButton.hidden = !state.tasks.some(task => task.column === 'done');
+}
+
+function renderArchiveButton() {
+  archiveButton.textContent = state.archive.length ? `Archive (${state.archive.length})` : 'Archive';
+}
+
+function createCard(task) {
+  const project = getProject(task.projectId);
+
+  const card = make('div', 'task-card');
+  card.tabIndex = 0;
+  card.draggable = true;
+  card.dataset.taskId = task.id;
+  card.dataset.projectId = task.projectId;
+  card.dataset.focusKey = `task:${task.id}`;
+
+  const dot = make('span', 'task-color-dot');
+  dot.style.background = projectColor(task.projectId);
+  dot.title = project ? project.name : '';
+
+  const text = make('span', 'task-text', task.text);
+
+  card.append(dot, text);
+
+  if (task.notes && task.notes.trim()) {
+    const notesIndicator = make('span', 'notes-indicator', '📝');
+    notesIndicator.title = task.notes.length > 300 ? `${task.notes.slice(0, 300)}…` : task.notes;
+    card.appendChild(notesIndicator);
   }
 
-  const savedProjectData = JSON.parse(savedProjects);
-  const projectsRow = document.querySelector('.projects-row');
-
-  projectsRow.innerHTML = '';
-
-  savedProjectData.forEach(project => {
-    createProject(project.name);
-
-    const section = getProjectSection(project.name);
-
-    if (section) {
-      const colorPicker = section.querySelector('.project-color-picker');
-
-      if (colorPicker && project.color) {
-        colorPicker.value = project.color;
-        section.style.setProperty('--project-color', project.color);
-      }
-
-      if (project.collapsed) {
-        section.classList.add('collapsed');
-      }
-    }
-  });
-}
-
-function makeCardInteractive(card) {
-  card.setAttribute('draggable', 'true');
-
-  card.addEventListener('click', (event) => {
-    if (event.target.classList.contains('delete-button')) {
-      return;
-    }
-
-    if (justDragged) {
-      justDragged = false;
-      return;
-    }
-
-    moveCardToNextStep(card);
+  const editButton = make('button', 'rename-task-button', '✏️');
+  editButton.type = 'button';
+  editButton.title = 'Edit task and notes (E)';
+  editButton.tabIndex = -1;
+  editButton.addEventListener('click', event => {
+    event.stopPropagation();
+    openEditor(task.id);
   });
 
-  card.addEventListener('dragstart', (event) => {
-    draggedCard = card;
-    draggedProject = null;
+  const deleteButton = make('button', 'delete-button', 'X');
+  deleteButton.type = 'button';
+  deleteButton.title = 'Delete (Del)';
+  deleteButton.tabIndex = -1;
+  deleteButton.addEventListener('click', event => {
+    event.stopPropagation();
+    deleteTask(task.id);
+  });
+
+  card.append(editButton, deleteButton);
+
+  // A single click moves the card, a double click opens the editor. The short delay
+  // lets us tell the two apart so a double click does not also move the card.
+  card.addEventListener('click', event => {
+    if (event.target.closest('button')) return;
+    if (Date.now() - lastDragEndAt < 150) return;
+
+    clearTimeout(pendingClickTimer);
+    if (event.detail > 1) return;
+
+    pendingClickTimer = setTimeout(() => {
+      pendingClickTimer = null;
+      commit(() => stepTask(task.id, 1));
+    }, CLICK_DELAY_MS);
+  });
+
+  card.addEventListener('dblclick', event => {
+    if (event.target.closest('button')) return;
+    clearTimeout(pendingClickTimer);
+    pendingClickTimer = null;
+    openEditor(task.id);
+  });
+
+  card.addEventListener('dragstart', event => {
+    draggedTaskId = task.id;
+    draggedProjectSection = null;
     card.classList.add('dragging');
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
     event.stopPropagation();
   });
 
-  card.addEventListener('dragend', (event) => {
+  card.addEventListener('dragend', event => {
     card.classList.remove('dragging');
-    draggedCard = null;
-    justDragged = true;
-
-    setTimeout(() => {
-      justDragged = false;
-    }, 100);
-
-    saveTasks();
+    draggedTaskId = null;
+    lastDragEndAt = Date.now();
+    document.querySelectorAll('.drag-over').forEach(zone => zone.classList.remove('drag-over'));
     event.stopPropagation();
   });
+
+  return card;
 }
 
-function addTaskRenameButton(card, textSpan) {
-  const renameButton = document.createElement('button');
-  renameButton.className = 'rename-task-button';
-  renameButton.textContent = '✏️';
+function renderProjects() {
+  projectsRow.replaceChildren(...state.projects.map(createProjectSection));
+}
 
-  renameButton.addEventListener('click', (event) => {
-    event.preventDefault();
+function createProjectSection(project) {
+  const tasks = state.tasks.filter(task => task.column === 'pool' && task.projectId === project.id);
+
+  const section = make('div', 'project-section drop-zone');
+  if (project.collapsed) section.classList.add('collapsed');
+  section.dataset.projectId = project.id;
+  section.style.setProperty('--project-color', project.color || DEFAULT_COLOR);
+
+  /* --- header --- */
+  const headerRow = make('div', 'project-header-row');
+  headerRow.draggable = true;
+
+  headerRow.addEventListener('dragstart', event => {
+    draggedProjectSection = section;
+    draggedTaskId = null;
+    section.classList.add('dragging-project');
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    event.stopPropagation();
+  });
+
+  headerRow.addEventListener('dragend', event => {
+    section.classList.remove('dragging-project');
+    draggedProjectSection = null;
     event.stopPropagation();
 
-    const oldText = textSpan.textContent;
+    const newOrder = [...projectsRow.querySelectorAll('.project-section')].map(s => s.dataset.projectId);
+    const oldOrder = state.projects.map(p => p.id);
 
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = oldText;
-    input.className = 'rename-task-input';
-
-    card.replaceChild(input, textSpan);
-    input.focus();
-    input.select();
-
-    function finishRename(saveChange) {
-      const newTextSpan = document.createElement('span');
-      newTextSpan.className = 'task-text';
-      newTextSpan.textContent = saveChange ? input.value.trim() || oldText : oldText;
-
-      card.replaceChild(newTextSpan, input);
-      textSpan = newTextSpan;
-      saveTasks();
+    if (newOrder.join() === oldOrder.join()) {
+      render();
+      return;
     }
 
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        finishRename(true);
-      } else if (e.key === 'Escape') {
-        finishRename(false);
-      }
-    });
-
-    input.addEventListener('blur', () => {
-      finishRename(true);
+    commit(() => {
+      state.projects.sort((a, b) => newOrder.indexOf(a.id) - newOrder.indexOf(b.id));
     });
   });
 
-  card.appendChild(renameButton);
-}
-
-function addDeleteButton(card) {
-  const deleteButton = document.createElement('button');
-  deleteButton.className = 'delete-button';
-  deleteButton.textContent = 'X';
-
-  deleteButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-    card.remove();
-    saveTasks();
-  });
-
-  card.appendChild(deleteButton);
-}
-
-function createTaskCard(taskText, columnName, projectName) {
-  const newCard = document.createElement('div');
-  newCard.className = 'task-card';
-  newCard.dataset.project = projectName || 'Work';
-
-  const colorDot = document.createElement('span');
-  colorDot.className = 'task-color-dot';
-
-  const projectColor = getProjectColor(projectName);
-  colorDot.style.background = projectColor;
-
-  let textSpan = document.createElement('span');
-  textSpan.className = 'task-text';
-  textSpan.textContent = taskText;
-
-  newCard.appendChild(colorDot);
-  newCard.appendChild(textSpan);
-
-  addTaskRenameButton(newCard, textSpan);
-  addDeleteButton(newCard);
-  makeCardInteractive(newCard);
-
-  if (columnName === 'todo') {
-    todoColumn.appendChild(newCard);
-  } else if (columnName === 'doing') {
-    doingColumn.appendChild(newCard);
-  } else if (columnName === 'done') {
-    doneColumn.appendChild(newCard);
-  } else {
-    const projectSection = getProjectSection(projectName || 'Work');
-    projectSection.appendChild(newCard);
-  }
-}
-
-function createProject(projectName) {
-  const projectsRow = document.querySelector('.projects-row');
-
-  const projectSection = document.createElement('div');
-  projectSection.className = 'project-section drop-zone';
-  projectSection.style.setProperty('--project-color', '#4f46e5');
-
-  const headerRow = document.createElement('div');
-  headerRow.className = 'project-header-row';
-  
-  headerRow.setAttribute('draggable', 'true');
-
-  headerRow.addEventListener('dragstart', (event) => {
-    draggedProject = projectSection;
-    projectSection.classList.add('dragging-project');
-    event.stopPropagation();
-  });
-
-  headerRow.addEventListener('dragend', (event) => {
-    projectSection.classList.remove('dragging-project');
-    draggedProject = null;
-    saveProjects();
-    event.stopPropagation();
-  });
-  
-  let heading = document.createElement('h3');
-  heading.textContent = projectName;
+  const heading = make('h3', '', project.name);
+  heading.title = project.collapsed ? 'Click to expand' : 'Click to collapse';
+  const count = make('span', 'project-count', tasks.length ? String(tasks.length) : '');
+  heading.appendChild(count);
 
   heading.addEventListener('click', () => {
-    projectSection.classList.toggle('collapsed');
-    saveProjects();
+    commit(() => {
+      const p = getProject(project.id);
+      if (p) p.collapsed = !p.collapsed;
+    }, { undoable: false });
   });
 
-  const colorPickerWrapper = document.createElement('div');
-  colorPickerWrapper.className = 'project-color-picker-wrapper';
-
-  const colorPickerButton = document.createElement('button');
-  colorPickerButton.className = 'project-color-picker-button';
-  colorPickerButton.textContent = '🎨';
+  /* colour picker */
+  const colorPickerWrapper = make('div', 'project-color-picker-wrapper');
+  const colorPickerButton = make('button', 'project-color-picker-button', '🎨');
   colorPickerButton.type = 'button';
+  colorPickerButton.tabIndex = -1;
 
   const colorPicker = document.createElement('input');
   colorPicker.type = 'color';
   colorPicker.className = 'project-color-picker';
-  colorPicker.value = '#4f46e5';
+  colorPicker.value = project.color || DEFAULT_COLOR;
+  colorPicker.title = 'Project colour';
 
-  colorPickerButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (typeof colorPicker.showPicker === 'function') {
-      colorPicker.showPicker();
-    } else {
-      colorPicker.click();
-    }
-  });
-
+  // While picking, update the colour live without re-rendering (that would close the picker).
   colorPicker.addEventListener('input', () => {
-    projectSection.style.setProperty('--project-color', colorPicker.value);
-    updateAllTasksForProject(heading.textContent);
-    saveProjects();
-    saveTasks();
+    section.style.setProperty('--project-color', colorPicker.value);
+    document.querySelectorAll(`.task-card[data-project-id="${CSS.escape(project.id)}"] .task-color-dot`)
+      .forEach(dot => { dot.style.background = colorPicker.value; });
   });
 
-  colorPickerWrapper.appendChild(colorPickerButton);
-  colorPickerWrapper.appendChild(colorPicker);
-   
-  const renameProjectButton = document.createElement('button');
-  renameProjectButton.className = 'rename-project-button';
-  renameProjectButton.textContent = '✏️';
+  colorPicker.addEventListener('change', () => {
+    const value = colorPicker.value;
+    commit(() => {
+      const p = getProject(project.id);
+      if (!p || p.color === value) return false;
+      p.color = value;
+      return true;
+    });
+  });
 
-  renameProjectButton.addEventListener('click', (event) => {
+  colorPickerWrapper.append(colorPickerButton, colorPicker);
+
+  /* rename */
+  const renameButton = make('button', 'rename-project-button', '✏️');
+  renameButton.type = 'button';
+  renameButton.title = 'Rename project';
+
+  renameButton.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-
-    const oldName = heading.textContent;
-
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = oldName;
-    input.className = 'rename-project-input';
-
-    headerRow.replaceChild(input, heading);
-    input.focus();
-    input.select();
-
-    function finishRename(saveChange) {
-      const newHeading = document.createElement('h3');
-      newHeading.textContent = saveChange ? input.value.trim() || oldName : oldName;
-
-      newHeading.addEventListener('click', () => {
-        projectSection.classList.toggle('collapsed');
-        saveProjects();
-      });
-
-      headerRow.replaceChild(newHeading, input);
-      heading = newHeading;
-
-      saveProjects();
-      saveTasks();
-    }
-
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        finishRename(true);
-      } else if (e.key === 'Escape') {
-        finishRename(false);
-      }
-    });
-
-    input.addEventListener('blur', () => {
-      finishRename(true);
-    });
+    startProjectRename(project, headerRow, heading);
   });
 
-  const deleteProjectButton = document.createElement('button');
-  deleteProjectButton.className = 'delete-project-button';
-  deleteProjectButton.textContent = 'X';
-  
-  deleteProjectButton.addEventListener('click', (event) => {
+  /* delete */
+  const deleteButton = make('button', 'delete-project-button', 'X');
+  deleteButton.type = 'button';
+  deleteButton.title = 'Delete project';
+
+  deleteButton.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-
-    projectSection.querySelectorAll('.task-card').forEach(card => {
-        card.remove();
-    });
-
-    projectSection.remove();
-    saveProjects();
-    saveTasks();
+    deleteProject(project.id);
   });
 
-  headerRow.appendChild(heading);
-  headerRow.appendChild(colorPickerWrapper);
-  headerRow.appendChild(renameProjectButton);
-  headerRow.appendChild(deleteProjectButton);
+  headerRow.append(heading, colorPickerWrapper, renameButton, deleteButton);
 
-  deleteProjectButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-
-    projectSection.querySelectorAll('.task-card').forEach(card => {
-      card.remove();
-    });
-
-    projectSection.remove();
-    saveProjects();
-    saveTasks();
-  });
-
-  const inputArea = document.createElement('div');
-  inputArea.className = 'project-task-input-area';
-
+  /* --- new task input --- */
+  const inputArea = make('div', 'project-task-input-area');
   const input = document.createElement('input');
+  input.type = 'text';
   input.className = 'project-task-input';
   input.placeholder = 'Type a new task';
+  input.dataset.focusKey = `newtask:${project.id}`;
+  input.dataset.draftKey = `newtask:${project.id}`;
 
-  const button = document.createElement('button');
-  button.className = 'project-add-task-button';
-  button.textContent = 'Add Task';
+  const addButton = make('button', 'project-add-task-button', 'Add Task');
+  addButton.type = 'button';
 
-  inputArea.appendChild(input);
-  inputArea.appendChild(button);
+  function addTaskFromInput() {
+    const text = input.value.trim();
+    if (text === '') return;
+    input.value = '';
+    lastProjectId = project.id;
+    commit(() => addTask(project.id, text));
+  }
 
-  projectSection.appendChild(headerRow);
-  projectSection.appendChild(inputArea);
+  addButton.addEventListener('click', () => {
+    addTaskFromInput();
+    focusNewTaskInput(project.id);
+  });
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') addTaskFromInput();
+  });
+  input.addEventListener('focus', () => {
+    lastProjectId = project.id;
+  });
 
-  projectsRow.appendChild(projectSection);
+  inputArea.append(input, addButton);
 
-  setupDropZones();
-  setupProjectAddButtons();
+  /* --- cards --- */
+  const list = make('div', 'card-list');
+  list.replaceChildren(...tasks.map(createCard));
+
+  section.append(headerRow, inputArea, list);
+  wireDropZone(section, () => ({ column: 'pool', projectId: project.id }));
+
+  return section;
 }
 
-function getDragAfterElement(zone, mouseY) {
-  const cards = [...zone.querySelectorAll('.task-card:not(.dragging)')];
+function startProjectRename(project, headerRow, heading) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = project.name;
+  input.className = 'rename-project-input';
+
+  headerRow.draggable = false; // text selection does not work inside a draggable element
+  headerRow.replaceChild(input, heading);
+  input.focus();
+  input.select();
+
+  let finished = false;
+
+  function finish(saveChange) {
+    if (finished) return;
+    finished = true;
+
+    const newName = input.value.trim();
+    if (!saveChange || newName === '' || newName === project.name) {
+      render();
+      return;
+    }
+
+    commit(() => {
+      const p = getProject(project.id);
+      if (p) p.name = newName;
+    });
+  }
+
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') finish(true);
+    else if (event.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+/* ================= Drag and drop ================= */
+
+function getDragAfterElement(list, mouseY) {
+  const cards = [...list.querySelectorAll('.task-card:not(.dragging)')];
 
   let closestCard = null;
   let closestOffset = Number.NEGATIVE_INFINITY;
@@ -485,127 +833,36 @@ function getDragAfterElement(zone, mouseY) {
   return closestCard;
 }
 
-function setupDropZones() {
-  const dropZones = document.querySelectorAll('.drop-zone');
+function wireDropZone(zone, getTarget) {
+  zone.addEventListener('dragover', event => {
+    if (!draggedTaskId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    zone.classList.add('drag-over');
+  });
 
-  dropZones.forEach(zone => {
-    zone.addEventListener('dragover', (event) => {
-      event.preventDefault();
-      zone.classList.add('drag-over');
-    });
+  zone.addEventListener('dragleave', event => {
+    if (!zone.contains(event.relatedTarget)) zone.classList.remove('drag-over');
+  });
 
-    zone.addEventListener('dragleave', () => {
-      zone.classList.remove('drag-over');
-    });
+  zone.addEventListener('drop', event => {
+    zone.classList.remove('drag-over');
+    if (!draggedTaskId) return;
 
-    zone.addEventListener('drop', (event) => {
-      zone.classList.remove('drag-over');
-      event.preventDefault();
+    event.preventDefault();
+    event.stopPropagation();
 
-      if (!draggedCard) {
-        return;
-      }
+    const taskId = draggedTaskId;
+    const list = zone.querySelector('.card-list');
+    const after = getDragAfterElement(list, event.clientY);
+    const target = getTarget();
 
-      if (zone.classList.contains('project-section')) {
-        const heading = zone.querySelector('h3');
-        if (heading) {
-          draggedCard.dataset.project = heading.textContent;
-          updateTaskColor(draggedCard);
-        }
-      }
-
-      const afterElement = getDragAfterElement(zone, event.clientY);
-
-      if (afterElement == null) {
-        zone.appendChild(draggedCard);
-      } else {
-        zone.insertBefore(draggedCard, afterElement);
-      }
-
-      saveTasks();
-    });
+    commit(() => moveTask(taskId, target.column, {
+      projectId: target.projectId,
+      beforeTaskId: after ? after.dataset.taskId : null
+    }));
   });
 }
-
-function setupProjectAddButtons() {
-  const projectSections = document.querySelectorAll('.project-section');
-
-  projectSections.forEach(section => {
-    const input = section.querySelector('.project-task-input');
-    const button = section.querySelector('.project-add-task-button');
-    const heading = section.querySelector('h3');
-
-    if (!input || !button || !heading) {
-      return;
-    }
-
-    function addTaskFromInput() {
-      const taskText = input.value.trim();
-
-      if (taskText === '') {
-        return;
-      }
-
-      const currentProjectName = heading.textContent.trim();
-
-      createTaskCard(taskText, 'pool', currentProjectName);
-      input.value = '';
-      saveTasks();
-    }
-
-    button.addEventListener('click', () => {
-      addTaskFromInput();
-    });
-
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        addTaskFromInput();
-      }
-    });
-  });
-}
-
-function loadTasks() {
-  const savedTasks = localStorage.getItem('tasks');
-
-  document.querySelectorAll('.task-card').forEach(card => card.remove());
-
-  if (!savedTasks) {
-    createTaskCard('Fix login bug', 'pool', 'Work');
-    createTaskCard('Write project proposal', 'pool', 'Work');
-    createTaskCard('Prepare slides', 'pool', 'Presentations');
-    saveTasks();
-    return;
-  }
-
-  const tasks = JSON.parse(savedTasks);
-
-  tasks.forEach(task => {
-    createTaskCard(task.text, task.column, task.project || 'Work');
-  });
-}
-
-function addProjectFromInput() {
-  const projectName = newProjectInput.value.trim();
-
-  if (projectName === '') {
-    return;
-  }
-
-  createProject(projectName);
-  saveProjects();
-  newProjectInput.value = '';
-}
-
-addProjectButton.addEventListener('click', () => {
-  addProjectFromInput();
-});
-
-newProjectInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    addProjectFromInput();
-  }
-});
 
 function getProjectAfterElement(container, mouseX) {
   const projects = [...container.querySelectorAll('.project-section:not(.dragging-project)')];
@@ -627,36 +884,491 @@ function getProjectAfterElement(container, mouseX) {
 }
 
 function setupProjectReordering() {
-  const projectsRow = document.querySelector('.projects-row');
-
-  projectsRow.addEventListener('dragover', (event) => {
-    if (!draggedProject) {
-      return;
-    }
-
+  projectsRow.addEventListener('dragover', event => {
+    if (!draggedProjectSection) return;
     event.preventDefault();
 
     const afterElement = getProjectAfterElement(projectsRow, event.clientX);
-
     if (afterElement == null) {
-      projectsRow.appendChild(draggedProject);
-    } else {
-      projectsRow.insertBefore(draggedProject, afterElement);
+      projectsRow.appendChild(draggedProjectSection);
+    } else if (afterElement !== draggedProjectSection.nextSibling) {
+      projectsRow.insertBefore(draggedProjectSection, afterElement);
     }
   });
 
-  projectsRow.addEventListener('drop', (event) => {
-    if (!draggedProject) {
-      return;
-    }
-
-    event.preventDefault();
-    saveProjects();
+  projectsRow.addEventListener('drop', event => {
+    if (draggedProjectSection) event.preventDefault();
   });
 }
 
-loadProjects();
-setupDropZones();
-setupProjectAddButtons();
+/* ================= Toast ================= */
+
+let toastTimer = null;
+
+function showToast(message, { undo: showUndo = false, sticky = false } = {}) {
+  clearTimeout(toastTimer);
+  toastMessage.textContent = message;
+  toastUndo.hidden = !showUndo;
+  toastEl.hidden = false;
+  toastEl.classList.toggle('toast-error', sticky);
+
+  if (!sticky) {
+    toastTimer = setTimeout(hideToast, showUndo ? 6000 : 2500);
+  }
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  if (saveFailed) return; // keep the save error visible
+  toastEl.hidden = true;
+}
+
+toastUndo.addEventListener('click', () => {
+  undo();
+});
+
+/* ================= Modals ================= */
+
+function openModal({ kind, title, className = '', onCancel }) {
+  closeModal();
+
+  const backdrop = make('div', 'modal-backdrop');
+  const modal = make('div', `modal ${className}`.trim());
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+
+  const heading = make('h3', 'modal-title', title);
+  const body = make('div', 'modal-body');
+  const footer = make('div', 'modal-footer');
+
+  modal.append(heading, body, footer);
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  const returnFocusKey = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.focusKey
+    : null;
+
+  const handle = {
+    kind,
+    backdrop,
+    modal,
+    body,
+    footer,
+    returnFocusKey,
+    cancel: () => {
+      if (onCancel) onCancel();
+      closeModal();
+    }
+  };
+
+  backdrop.addEventListener('mousedown', event => {
+    if (event.target === backdrop) handle.cancel();
+  });
+
+  currentModal = handle;
+  return handle;
+}
+
+function closeModal() {
+  if (!currentModal) return;
+  const { backdrop, returnFocusKey } = currentModal;
+  currentModal = null;
+  backdrop.remove();
+
+  if (returnFocusKey) {
+    const target = document.querySelector(`[data-focus-key="${CSS.escape(returnFocusKey)}"]`);
+    if (target) target.focus({ preventScroll: true });
+  }
+}
+
+function modalButton(label, className, onClick) {
+  const button = make('button', className, label);
+  button.type = 'button';
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function confirmDialog({ title, message, confirmLabel = 'OK', danger = false }) {
+  return new Promise(resolve => {
+    const modal = openModal({ kind: 'confirm', title, className: 'modal-small', onCancel: () => resolve(false) });
+    modal.body.appendChild(make('p', 'modal-text', message));
+
+    const cancel = modalButton('Cancel', '', () => modal.cancel());
+    const confirm = modalButton(confirmLabel, danger ? 'button-danger' : 'button-primary', () => {
+      closeModal();
+      resolve(true);
+    });
+
+    modal.footer.append(make('span', 'modal-footer-spacer'), cancel, confirm);
+    confirm.focus();
+  });
+}
+
+function openEditor(taskId) {
+  const task = getTask(taskId);
+  if (!task) return;
+
+  const modal = openModal({ kind: 'editor', title: 'Edit task', className: 'modal-editor' });
+
+  const titleLabel = make('label', 'field');
+  titleLabel.appendChild(make('span', 'field-label', 'Task'));
+  const titleInput = document.createElement('input');
+  titleInput.type = 'text';
+  titleInput.value = task.text;
+  titleLabel.appendChild(titleInput);
+
+  const projectLabel = make('label', 'field');
+  projectLabel.appendChild(make('span', 'field-label', 'Project'));
+  const projectSelect = document.createElement('select');
+  state.projects.forEach(project => {
+    const option = make('option', '', project.name);
+    option.value = project.id;
+    option.selected = project.id === task.projectId;
+    projectSelect.appendChild(option);
+  });
+  projectLabel.appendChild(projectSelect);
+
+  const notesLabel = make('label', 'field');
+  notesLabel.appendChild(make('span', 'field-label', 'Notes'));
+  const notesInput = document.createElement('textarea');
+  notesInput.rows = 8;
+  notesInput.value = task.notes || '';
+  notesInput.placeholder = 'Details, links, next steps…';
+  notesLabel.appendChild(notesInput);
+
+  const meta = make('p', 'modal-meta',
+    `In ${COLUMN_LABELS[task.column]} · created ${formatDate(task.createdAt)}` +
+    (task.updatedAt && task.updatedAt !== task.createdAt ? ` · updated ${formatDate(task.updatedAt)}` : ''));
+
+  modal.body.append(titleLabel, projectLabel, notesLabel, meta);
+
+  function saveEdits() {
+    const text = titleInput.value.trim() || task.text;
+    const notes = notesInput.value.replace(/\s+$/, '');
+    const projectId = projectSelect.value;
+
+    closeModal();
+
+    commit(() => {
+      const current = getTask(taskId);
+      if (!current) return false;
+      if (current.text === text && (current.notes || '') === notes && current.projectId === projectId) return false;
+      current.text = text;
+      current.notes = notes;
+      current.projectId = projectId;
+      current.updatedAt = nowIso();
+      return true;
+    });
+  }
+
+  const deleteButton = modalButton('Delete', 'button-danger-subtle', () => {
+    closeModal();
+    deleteTask(taskId);
+  });
+  const cancelButton = modalButton('Cancel', '', () => modal.cancel());
+  const saveButton = modalButton('Save', 'button-primary', saveEdits);
+  saveButton.title = 'Save (Ctrl+Enter)';
+
+  modal.footer.append(deleteButton, make('span', 'modal-footer-spacer'), cancelButton, saveButton);
+
+  titleInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      saveEdits();
+    }
+  });
+
+  modal.modal.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      saveEdits();
+    }
+  });
+
+  titleInput.focus();
+  titleInput.select();
+}
+
+function openArchive() {
+  const modal = openModal({ kind: 'archive', title: 'Archive', className: 'modal-archive' });
+  renderArchiveList(modal);
+}
+
+function renderArchiveList(modal) {
+  modal.body.replaceChildren();
+  modal.footer.replaceChildren();
+
+  if (state.archive.length === 0) {
+    modal.body.appendChild(make('p', 'modal-text',
+      'No archived tasks yet. Use “Clear” in the Done column to archive finished tasks.'));
+  } else {
+    const list = make('div', 'archive-list');
+
+    state.archive.forEach(item => {
+      const row = make('div', 'archive-item');
+
+      const dot = make('span', 'task-color-dot');
+      const project = getProject(item.projectId);
+      dot.style.background = project ? project.color : '#9aa5b1';
+
+      const info = make('div', 'archive-info');
+      info.appendChild(make('div', 'archive-text', item.text));
+      const projectName = project ? project.name : (item.projectName ? `${item.projectName} (deleted)` : '');
+      info.appendChild(make('div', 'archive-meta',
+        [projectName, `archived ${formatDate(item.archivedAt)}`].filter(Boolean).join(' · ')));
+      if (item.notes) {
+        const notes = make('div', 'archive-notes', item.notes);
+        info.appendChild(notes);
+      }
+
+      const restore = modalButton('Restore', '', () => restoreFromArchive(item.id));
+      restore.title = 'Put back in the Task Pool';
+      const remove = modalButton('Delete', 'button-danger-subtle', () => deleteFromArchive(item.id));
+
+      row.append(dot, info, restore, remove);
+      list.appendChild(row);
+    });
+
+    modal.body.appendChild(list);
+    modal.footer.appendChild(modalButton('Empty archive', 'button-danger-subtle', emptyArchive));
+  }
+
+  modal.footer.append(make('span', 'modal-footer-spacer'), modalButton('Close', 'button-primary', () => closeModal()));
+}
+
+function openShortcuts() {
+  const modal = openModal({ kind: 'shortcuts', title: 'Keyboard shortcuts', className: 'modal-small' });
+
+  const rows = [
+    ['N', 'New task in the last used project'],
+    ['P', 'New project'],
+    ['Ctrl+Z', 'Undo'],
+    ['Ctrl+Y / Ctrl+Shift+Z', 'Redo'],
+    ['?', 'Show this list'],
+    ['Esc', 'Close dialog / leave a text field'],
+    ['', 'With a card selected (click Tab to move between cards):'],
+    ['Enter / →', 'Move to the next step'],
+    ['←', 'Move back one step'],
+    ['↑ / ↓', 'Select the card above / below'],
+    ['E', 'Edit task and notes'],
+    ['Delete', 'Delete task'],
+    ['', 'In the edit dialog:'],
+    ['Ctrl+Enter', 'Save']
+  ];
+
+  const table = make('table', 'shortcut-table');
+  rows.forEach(([keys, description]) => {
+    const tr = document.createElement('tr');
+    if (!keys) {
+      const th = make('th', '', description);
+      th.colSpan = 2;
+      tr.appendChild(th);
+    } else {
+      const keyCell = document.createElement('td');
+      keys.split(' / ').forEach((key, index) => {
+        if (index > 0) keyCell.append(' / ');
+        keyCell.appendChild(make('kbd', '', key));
+      });
+      tr.append(keyCell, make('td', '', description));
+    }
+    table.appendChild(tr);
+  });
+
+  modal.body.appendChild(table);
+  const close = modalButton('Close', 'button-primary', () => closeModal());
+  modal.footer.append(make('span', 'modal-footer-spacer'), close);
+  close.focus();
+}
+
+/* ================= Keyboard ================= */
+
+function focusNewTaskInput(projectId) {
+  let project = getProject(projectId) || getProject(lastProjectId) || state.projects[0];
+  if (!project) return;
+
+  if (project.collapsed) {
+    commit(() => {
+      getProject(project.id).collapsed = false;
+    }, { undoable: false });
+  }
+
+  const input = document.querySelector(`[data-focus-key="newtask:${CSS.escape(project.id)}"]`);
+  if (input) {
+    input.focus();
+    input.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+}
+
+function focusSiblingCard(card, direction) {
+  const cards = [...card.parentElement.querySelectorAll('.task-card')];
+  const next = cards[cards.indexOf(card) + direction];
+  if (next) {
+    next.focus();
+    next.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function handleCardKey(event, card) {
+  const taskId = card.dataset.taskId;
+
+  switch (event.key) {
+    case 'Enter':
+    case ' ':
+    case 'ArrowRight':
+      event.preventDefault();
+      commit(() => stepTask(taskId, 1));
+      return true;
+    case 'ArrowLeft':
+      event.preventDefault();
+      commit(() => stepTask(taskId, -1));
+      return true;
+    case 'ArrowUp':
+      event.preventDefault();
+      focusSiblingCard(card, -1);
+      return true;
+    case 'ArrowDown':
+      event.preventDefault();
+      focusSiblingCard(card, 1);
+      return true;
+    case 'e':
+    case 'E':
+    case 'F2':
+      event.preventDefault();
+      openEditor(taskId);
+      return true;
+    case 'Delete':
+    case 'Backspace': {
+      event.preventDefault();
+      const cards = [...card.parentElement.querySelectorAll('.task-card')];
+      const neighbour = cards[cards.indexOf(card) + 1] || cards[cards.indexOf(card) - 1];
+      deleteTask(taskId);
+      if (neighbour) {
+        const target = document.querySelector(`[data-focus-key="${CSS.escape(neighbour.dataset.focusKey)}"]`);
+        if (target) target.focus();
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+document.addEventListener('keydown', event => {
+  if (currentModal) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      currentModal.cancel();
+    }
+    return;
+  }
+
+  const typing = isTypingTarget(event.target);
+  const mod = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+
+  if (mod && !event.altKey && !typing) {
+    if (key === 'z') {
+      event.preventDefault();
+      if (event.shiftKey) redo(); else undo();
+      return;
+    }
+    if (key === 'y') {
+      event.preventDefault();
+      redo();
+      return;
+    }
+  }
+
+  if (typing) {
+    if (event.key === 'Escape') event.target.blur();
+    return;
+  }
+
+  if (mod || event.altKey) return;
+
+  const card = event.target.closest ? event.target.closest('.task-card') : null;
+  if (card && handleCardKey(event, card)) return;
+
+  if (key === 'n') {
+    event.preventDefault();
+    focusNewTaskInput(lastProjectId);
+  } else if (key === 'p') {
+    event.preventDefault();
+    newProjectInput.focus();
+  } else if (event.key === '?') {
+    event.preventDefault();
+    openShortcuts();
+  }
+});
+
+/* ================= Wiring ================= */
+
+BOARD_COLUMNS.forEach(column => {
+  wireDropZone(boardColumns[column].zone, () => ({ column, projectId: null }));
+});
+
+addProjectButton.addEventListener('click', addProjectFromInput);
+newProjectInput.addEventListener('keydown', event => {
+  if (event.key === 'Enter') addProjectFromInput();
+});
+
+clearDoneButton.addEventListener('click', clearDone);
+archiveButton.addEventListener('click', openArchive);
+shortcutsButton.addEventListener('click', openShortcuts);
+
 setupProjectReordering();
-loadTasks();
+
+if (storage) {
+  storage.onImported(raw => {
+    const data = normalizeData(raw);
+    if (!data) {
+      showToast('That file could not be imported.');
+      return;
+    }
+    closeModal();
+    commit(() => {
+      state = data;
+    }, { toast: 'Backup imported' });
+  });
+
+  storage.onCommand(command => {
+    if (command === 'undo') undo();
+    else if (command === 'redo') redo();
+    else if (command === 'shortcuts') openShortcuts();
+    else if (command === 'archive') openArchive();
+  });
+}
+
+async function init() {
+  let data = null;
+  let migrated = false;
+
+  try {
+    data = normalizeData(await loadRawData());
+  } catch (err) {
+    console.error('Could not load data', err);
+    savingBlocked = true;
+    state = defaultData();
+    render();
+    saveFailed = true;
+    showToast(`Could not load your data, so saving is turned off to protect it. Restart the app or check File → Open data folder. (${err && err.message ? err.message : err})`, { sticky: true });
+    return;
+  }
+
+  if (!data) {
+    const legacy = readLegacyLocalStorage();
+    data = legacy ? normalizeData(legacy) : null;
+    migrated = Boolean(data);
+  }
+
+  state = data || defaultData();
+  save();
+  render();
+
+  if (migrated && storage) {
+    showToast('Your tasks now live in a data file (File → Open data folder).');
+  }
+}
+
+init();
