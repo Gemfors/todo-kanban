@@ -6,6 +6,7 @@ Run all with `npm test` (or `node tests/run-all.js --verbose` for every check).
 - `waiting.test.js` – "Waiting for" marks, plus tasks arriving from quick add.
 - `mouse.test.js` – W/E on the card under the mouse, the right-click menu.
 - `quickadd.test.js` – the quick-add box: project chips, ↑↓ / Alt+1–9, #tags, Enter variants.
+- `labels.test.js` – project tags on board cards, automatic/custom short labels, the project header menu.
 - `main.test.js` – main process against a mocked Electron (`electron-mock.js`): hotkey, quick-add window, tray, close-to-tray, start with Windows, data file and backups, taskbar identity.
 
 The browser tests need Playwright with Chromium. It isn't a project dependency, so point

@@ -3,7 +3,15 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
-## 1.4.1 – 2026-10-06
+## 1.5.0 – 2026-10-06
+
+### Added
+- Project tags on Today-board cards: a small tag in the project colour with a short label (LAM, SE, UPP, HCS, AHK, ÖVR…) replaces the colour dot, so you can tell projects apart without relying on colour alone. Hover the tag for the full name. Task Pool cards keep the dot, since they already sit under their project.
+  - Labels are automatic: initials for several words, a leading acronym as it is, otherwise the first three letters. Clashes get an extra letter (Sales Enablement next to Sales Excellence → SEN).
+  - Text on the tag switches between white and dark depending on the colour.
+- Right-click a project header for Rename, Short label…, Change colour and Delete project. Short label sets your own label (up to 5 characters; leave empty for automatic).
+
+
 
 ### Changed
 - W and E now work on the card under the mouse pointer. Before, they needed a card selected with Tab, while a click moves a card and a double-click opens the editor.

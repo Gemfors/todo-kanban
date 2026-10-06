@@ -92,6 +92,78 @@ function projectColor(id) {
   return (project && project.color) || DEFAULT_COLOR;
 }
 
+/* ---------- Project short labels ---------- */
+
+const MAX_LABEL_LENGTH = 5;
+
+function cleanShortLabel(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, '').slice(0, MAX_LABEL_LENGTH);
+}
+
+// Automatic label from the name: initials for several words (Large Accounts Management → LAM),
+// a leading acronym as is (AHK & Macros → AHK), otherwise the first three letters (Övrigt → ÖVR).
+function autoShortLabel(name) {
+  const words = String(name || '').split(/[\s/&_,.+\-]+/).filter(Boolean);
+  if (words.length === 0) return '?';
+
+  const isAcronym = word => word.length >= 2 && word.length <= MAX_LABEL_LENGTH && word === word.toLocaleUpperCase('sv') && /\p{L}/u.test(word);
+  if (isAcronym(words[0])) return words[0];
+  if (words.length === 1) return words[0].slice(0, 3).toLocaleUpperCase('sv');
+
+  return words.slice(0, 4).map(word => word[0]).join('').toLocaleUpperCase('sv');
+}
+
+// Labels for all projects; automatic labels that would collide get an extra letter or a number.
+function projectLabels() {
+  const labels = new Map();
+  const used = new Set();
+
+  state.projects.filter(p => cleanShortLabel(p.shortLabel)).forEach(project => {
+    const label = cleanShortLabel(project.shortLabel);
+    labels.set(project.id, label);
+    used.add(label.toLocaleUpperCase('sv'));
+  });
+
+  state.projects.filter(p => !labels.has(p.id)).forEach(project => {
+    const base = autoShortLabel(project.name);
+    const letters = String(project.name).replace(/[^\p{L}\p{N}]/gu, '').toLocaleUpperCase('sv');
+    const words = String(project.name).split(/[\s/&_,.+\-]+/).filter(Boolean);
+    // e.g. Sales Enablement next to Sales Excellence (SE) → SEN
+    const longerInitials = words.length > 1
+      ? (words.slice(0, -1).map(w => w[0]).join('') + words[words.length - 1].slice(0, 2)).toLocaleUpperCase('sv')
+      : '';
+    const candidates = [base, longerInitials, letters.slice(0, 3), letters.slice(0, 4)];
+    let label = candidates.find(c => c && !used.has(c.toLocaleUpperCase('sv')));
+    for (let n = 2; !label; n++) {
+      const numbered = `${base.slice(0, MAX_LABEL_LENGTH - 1)}${n}`;
+      if (!used.has(numbered)) label = numbered;
+    }
+    labels.set(project.id, label);
+    used.add(label.toLocaleUpperCase('sv'));
+  });
+
+  return labels;
+}
+
+function projectLabel(projectId) {
+  return projectLabels().get(projectId) || '?';
+}
+
+// Dark or white text, whichever reads better on the project colour.
+function readableTextColor(hex) {
+  const value = isColor(hex) ? hex : DEFAULT_COLOR;
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(value.slice(i, i + 2), 16) / 255)
+    .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminance > 0.4 ? '#1f2933' : '#ffffff';
+}
+
+function paintProjectTag(tag, color) {
+  tag.style.background = color;
+  tag.style.color = readableTextColor(color);
+}
+
 function formatDate(iso) {
   if (!iso) return '';
   const date = new Date(iso);
@@ -178,7 +250,8 @@ function normalizeData(raw) {
       id,
       name: cleanName,
       color: isColor(extra.color) ? extra.color : DEFAULT_COLOR,
-      collapsed: Boolean(extra.collapsed)
+      collapsed: Boolean(extra.collapsed),
+      shortLabel: cleanShortLabel(extra.shortLabel)
     };
     data.projects.push(project);
     projectIds.add(id);
@@ -623,8 +696,16 @@ function createCard(task) {
   card.dataset.projectId = task.projectId;
   card.dataset.focusKey = `task:${task.id}`;
 
-  const dot = make('span', 'task-color-dot');
-  dot.style.background = projectColor(task.projectId);
+  // On the Today board the project shows as a coloured tag with its short label; in the
+  // Task Pool the card already sits under its project, so a colour dot is enough.
+  let dot;
+  if (task.column === 'pool') {
+    dot = make('span', 'task-color-dot');
+    dot.style.background = projectColor(task.projectId);
+  } else {
+    dot = make('span', 'project-tag', projectLabel(task.projectId));
+    paintProjectTag(dot, projectColor(task.projectId));
+  }
   dot.title = project ? project.name : '';
 
   const text = make('span', 'task-text', task.text);
@@ -818,6 +899,8 @@ function createProjectSection(project) {
     section.style.setProperty('--project-color', colorPicker.value);
     document.querySelectorAll(`.task-card[data-project-id="${CSS.escape(project.id)}"] .task-color-dot`)
       .forEach(dot => { dot.style.background = colorPicker.value; });
+    document.querySelectorAll(`.task-card[data-project-id="${CSS.escape(project.id)}"] .project-tag`)
+      .forEach(tag => paintProjectTag(tag, colorPicker.value));
   });
 
   colorPicker.addEventListener('change', () => {
@@ -855,6 +938,17 @@ function createProjectSection(project) {
   });
 
   headerRow.append(heading, colorPickerWrapper, renameButton, deleteButton);
+
+  headerRow.addEventListener('contextmenu', event => {
+    event.preventDefault();
+    openProjectMenu(project.id, event.clientX, event.clientY, {
+      onRename: () => startProjectRename(project, headerRow, heading),
+      onColor: () => {
+        if (typeof colorPicker.showPicker === 'function') colorPicker.showPicker();
+        else colorPicker.click();
+      }
+    });
+  });
 
   /* --- new task input --- */
   const inputArea = make('div', 'project-task-input-area');
@@ -1128,6 +1222,59 @@ function confirmDialog({ title, message, confirmLabel = 'OK', danger = false }) 
   });
 }
 
+function openProjectLabelDialog(projectId) {
+  const project = getProject(projectId);
+  if (!project) return;
+
+  const automatic = autoShortLabel(project.name);
+  const modal = openModal({ kind: 'project-label', title: `Short label for “${project.name}”`, className: 'modal-small' });
+
+  const label = make('label', 'field');
+  label.appendChild(make('span', 'field-label', `Up to ${MAX_LABEL_LENGTH} characters. Leave empty for the automatic label.`));
+  const row = make('div', 'label-row');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = MAX_LABEL_LENGTH;
+  input.value = cleanShortLabel(project.shortLabel);
+  input.placeholder = automatic;
+  const preview = make('span', 'project-tag project-tag-preview');
+  const updatePreview = () => {
+    preview.textContent = cleanShortLabel(input.value) || projectLabel(projectId);
+    paintProjectTag(preview, project.color || DEFAULT_COLOR);
+  };
+  input.addEventListener('input', updatePreview);
+  row.append(input, preview);
+  label.appendChild(row);
+  modal.body.appendChild(label);
+  updatePreview();
+
+  const save = () => {
+    const value = cleanShortLabel(input.value);
+    closeModal();
+    commit(() => {
+      const current = getProject(projectId);
+      if (!current || cleanShortLabel(current.shortLabel) === value) return false;
+      current.shortLabel = value;
+      return true;
+    }, { toast: value ? `Label for ${project.name}: ${value}` : `${project.name} uses the automatic label again` });
+  };
+
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      save();
+    }
+  });
+
+  modal.footer.append(
+    make('span', 'modal-footer-spacer'),
+    modalButton('Cancel', '', () => modal.cancel()),
+    modalButton('Save', 'button-primary', save)
+  );
+  input.focus();
+  input.select();
+}
+
 function toggleWaiting(taskId) {
   const task = getTask(taskId);
   if (!task) return;
@@ -1359,6 +1506,8 @@ function openShortcuts() {
     ['W', 'Mark as waiting for someone / no longer waiting'],
     ['E', 'Edit task and notes'],
     ['Right-click', 'Menu: waiting, edit, move, delete'],
+    ['', 'Right-click a project header:'],
+    ['Right-click', 'Rename, short label, colour, delete'],
     ['', 'With a card selected using the keyboard (Tab):'],
     ['Enter / →', 'Move to the next step'],
     ['←', 'Move back one step'],
@@ -1417,9 +1566,9 @@ function cardUnderPointer() {
   return element && element.closest ? element.closest('.task-card') : null;
 }
 
-/* ---------- Right-click menu on cards ---------- */
+/* ---------- Right-click menus ---------- */
 
-let cardMenu = null;
+let cardMenu = null; // the open context menu (cards or project headers)
 
 function closeCardMenu() {
   if (!cardMenu) return;
@@ -1427,38 +1576,31 @@ function closeCardMenu() {
   cardMenu = null;
 }
 
-function openCardMenu(taskId, x, y) {
+// entries: [{ label, shortcut, action, className }] with null for a separator.
+function openContextMenu(entries, x, y) {
   closeCardMenu();
-  const task = getTask(taskId);
-  if (!task) return;
 
   const element = make('div', 'context-menu');
   element.setAttribute('role', 'menu');
-
   const items = [];
-  const addItem = (label, shortcut, action, className = '') => {
-    const item = make('button', `context-menu-item ${className}`.trim());
+
+  entries.forEach(entry => {
+    if (!entry) {
+      element.appendChild(make('div', 'context-menu-separator'));
+      return;
+    }
+    const item = make('button', `context-menu-item ${entry.className || ''}`.trim());
     item.type = 'button';
     item.setAttribute('role', 'menuitem');
-    item.append(make('span', 'context-menu-label', label));
-    if (shortcut) item.append(make('kbd', '', shortcut));
+    item.append(make('span', 'context-menu-label', entry.label));
+    if (entry.shortcut) item.append(make('kbd', '', entry.shortcut));
     item.addEventListener('click', () => {
       closeCardMenu();
-      action();
+      entry.action();
     });
     element.appendChild(item);
-    items.push({ item, shortcut, action });
-  };
-  const addSeparator = () => element.appendChild(make('div', 'context-menu-separator'));
-
-  addItem(task.waitingFor ? '⏳ No longer waiting' : '⏳ Waiting for…', 'W', () => toggleWaiting(taskId));
-  addItem('✏️ Edit', 'E', () => openEditor(taskId));
-  addSeparator();
-  ['pool', 'todo', 'doing', 'done']
-    .filter(column => column !== task.column)
-    .forEach(column => addItem(`Move to ${COLUMN_LABELS[column]}`, '', () => commit(() => moveTask(taskId, column))));
-  addSeparator();
-  addItem('Delete', 'Del', () => deleteTask(taskId), 'context-menu-danger');
+    items.push({ item, shortcut: entry.shortcut, action: entry.action });
+  });
 
   document.body.appendChild(element);
 
@@ -1469,8 +1611,37 @@ function openCardMenu(taskId, x, y) {
   element.style.left = `${Math.max(8, left)}px`;
   element.style.top = `${top}px`;
 
-  cardMenu = { element, items, taskId };
+  cardMenu = { element, items };
   items[0].item.focus();
+}
+
+function openCardMenu(taskId, x, y) {
+  const task = getTask(taskId);
+  if (!task) return;
+
+  openContextMenu([
+    { label: task.waitingFor ? '⏳ No longer waiting' : '⏳ Waiting for…', shortcut: 'W', action: () => toggleWaiting(taskId) },
+    { label: '✏️ Edit', shortcut: 'E', action: () => openEditor(taskId) },
+    null,
+    ...['pool', 'todo', 'doing', 'done']
+      .filter(column => column !== task.column)
+      .map(column => ({ label: `Move to ${COLUMN_LABELS[column]}`, action: () => commit(() => moveTask(taskId, column)) })),
+    null,
+    { label: 'Delete', shortcut: 'Del', action: () => deleteTask(taskId), className: 'context-menu-danger' }
+  ], x, y);
+}
+
+function openProjectMenu(projectId, x, y, { onRename, onColor }) {
+  const project = getProject(projectId);
+  if (!project) return;
+
+  openContextMenu([
+    { label: '✏️ Rename', action: onRename },
+    { label: `🏷️ Short label (${projectLabel(projectId)})…`, action: () => openProjectLabelDialog(projectId) },
+    { label: '🎨 Change colour', action: onColor },
+    null,
+    { label: 'Delete project…', action: () => deleteProject(projectId), className: 'context-menu-danger' }
+  ], x, y);
 }
 
 document.addEventListener('mousedown', event => {

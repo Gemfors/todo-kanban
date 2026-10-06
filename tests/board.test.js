@@ -74,7 +74,7 @@ const { check, errors, finish } = createChecker('board');
   await page.fill('.rename-project-input', 'Slides');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(100);
-  const dot = await card('Todo C renamed').locator('.task-color-dot').evaluate(e => getComputedStyle(e).backgroundColor);
+  const dot = await card('Todo C renamed').locator('.project-tag').evaluate(e => getComputedStyle(e).backgroundColor);
   check(dot === 'rgb(0, 170, 0)', 'board card keeps project colour after rename: ' + dot);
   // Move Todo C through to done and back to pool -> should land in Slides
   for (let i = 0; i < 3; i++) { await card('Todo C renamed').click(); await page.waitForTimeout(350); }
