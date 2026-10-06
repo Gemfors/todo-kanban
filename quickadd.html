@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>Quick add</title>
+  <link rel="stylesheet" href="quickadd.css">
+</head>
+<body>
+  <div class="qa">
+    <div class="qa-row">
+      <span class="qa-dot" id="qa-dot"></span>
+      <input id="qa-text" type="text" autocomplete="off" spellcheck="true"
+             placeholder="Add a task…   #name picks the project">
+      <select id="qa-project" title="Project"></select>
+    </div>
+    <div class="qa-hint" id="qa-hint">
+      <span><kbd>Enter</kbd> Task Pool</span>
+      <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> To Do</span>
+      <span><kbd>Shift</kbd>+<kbd>Enter</kbd> add another</span>
+      <span><kbd>Esc</kbd> close</span>
+    </div>
+    <div class="qa-status" id="qa-status" hidden></div>
+  </div>
+  <script src="quickadd.js"></script>
+</body>
+</html>

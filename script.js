@@ -340,13 +340,13 @@ function stepTask(taskId, direction) {
   return moveTask(taskId, target);
 }
 
-function addTask(projectId, text) {
+function addTask(projectId, text, column = 'pool') {
   state.tasks.push({
     id: uid(),
     text,
     notes: '',
     projectId,
-    column: 'pool',
+    column: ALL_COLUMNS.includes(column) ? column : 'pool',
     createdAt: nowIso(),
     updatedAt: nowIso()
   });
@@ -1141,6 +1141,7 @@ function openShortcuts() {
   const modal = openModal({ kind: 'shortcuts', title: 'Keyboard shortcuts', className: 'modal-small' });
 
   const rows = [
+    ['Ctrl+Alt+K', 'Quick add from any program (also works with the window closed)'],
     ['N', 'New task in the last used project'],
     ['P', 'New project'],
     ['Ctrl+Z', 'Undo'],
@@ -1330,6 +1331,19 @@ if (storage) {
     commit(() => {
       state = data;
     }, { toast: 'Backup imported' });
+  });
+
+  // Tasks typed into the quick-add box (global hotkey) arrive here.
+  if (typeof storage.onQuickAdd === 'function') storage.onQuickAdd(task => {
+    const text = task && typeof task.text === 'string' ? task.text.trim() : '';
+    if (!text) return;
+
+    const project = getProject(task.projectId) || state.projects[0];
+    const column = task.column === 'todo' ? 'todo' : 'pool';
+
+    commit(() => addTask(project.id, text, column), {
+      toast: `Added “${text}” to ${column === 'todo' ? COLUMN_LABELS.todo : project.name}`
+    });
   });
 
   storage.onCommand(command => {

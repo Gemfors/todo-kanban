@@ -3,6 +3,21 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.2.0 – 2026-10-06
+
+### Added
+- Quick add from anywhere: press Ctrl+Alt+K in any program to open a small box, type the task and press Enter.
+  - `#name` picks the project by the start of its name, part of it, or its initials (`#sales`, `#upph`, `#lam`).
+  - Enter adds to the Task Pool, Ctrl+Enter straight to To Do, Shift+Enter adds and keeps the box open, Esc closes.
+  - Remembers the last project used; opens on the monitor where the mouse is.
+- Tray icon: click to open the board; the menu has Quick add, Start with Windows and Quit.
+- Starts hidden in the tray when you log in to Windows (File → Start with Windows to turn off).
+- App icon (window and tray).
+
+### Changed
+- Closing the window hides it to the tray so the hotkey keeps working. Quit from the tray menu or with Ctrl+Q.
+- The hotkey can be changed with `quickAddShortcut` in `settings.json` in the data folder (Electron accelerator format).
+
 ## 1.1.0 – 2026-10-06
 
 ### Added
