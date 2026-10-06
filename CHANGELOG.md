@@ -3,6 +3,11 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.3.1 – 2026-10-06
+
+### Changed
+- The Archive button no longer shows a task count.
+
 ## 1.3.0 – 2026-10-06
 
 ### Added

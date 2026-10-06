@@ -536,7 +536,7 @@ function renderBoard() {
 }
 
 function renderArchiveButton() {
-  archiveButton.textContent = state.archive.length ? `Archive (${state.archive.length})` : 'Archive';
+  archiveButton.textContent = 'Archive';
 }
 
 function createCard(task) {
