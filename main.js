@@ -12,6 +12,7 @@ const dataBackupFile = path.join(userDataDir, 'kanban-data.bak.json');
 const dailyBackupDir = path.join(userDataDir, 'backups');
 const DAILY_BACKUPS_TO_KEEP = 14;
 
+const APP_ID = 'com.olle.todo-kanban';
 const DEFAULT_QUICK_ADD_SHORTCUT = 'CommandOrControl+Alt+K';
 const QUICK_ADD_WIDTH = 640;
 const QUICK_ADD_MIN_HEIGHT = 90;
@@ -299,7 +300,7 @@ function createQuickAddWindow() {
     alwaysOnTop: true,
     title: 'Quick add',
     backgroundColor: '#ffffff',
-    icon: path.join(__dirname, 'assets', 'icon.png'),
+    icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'quickadd-preload.js'),
       nodeIntegration: false,
@@ -432,6 +433,10 @@ function registerQuickAddShortcut() {
 }
 
 /* ---------- Tray and start with Windows ---------- */
+
+function windowIconPath() {
+  return path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
+}
 
 function trayIconPath() {
   return process.platform === 'win32'
@@ -597,7 +602,7 @@ function createWindow() {
     y: onScreen ? windowState.y : undefined,
     show: false,
     title: `Todo Kanban ${app.getVersion()}`,
-    icon: path.join(__dirname, 'assets', 'icon.png'),
+    icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -606,6 +611,19 @@ function createWindow() {
   });
 
   pendingMaximize = Boolean(windowState.isMaximized);
+
+  // Tell the Windows taskbar explicitly which icon to use for this window. Without this it
+  // falls back to whatever it has cached for the app id (Electron's default atom icon).
+  // The installed exe carries the kanban icon, so point at that.
+  if (process.platform === 'win32' && app.isPackaged) {
+    mainWindow.setAppDetails({
+      appId: APP_ID,
+      appIconPath: process.execPath,
+      appIconIndex: 0,
+      relaunchCommand: `"${process.execPath}"`,
+      relaunchDisplayName: 'Todo Kanban'
+    });
+  }
 
   // Keep the version in the title bar instead of the page's <title>.
   mainWindow.on('page-title-updated', event => event.preventDefault());
@@ -641,7 +659,7 @@ function createWindow() {
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;
 
-  if (process.platform === 'win32') app.setAppUserModelId('com.olle.todo-kanban');
+  if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 
   settings = loadSettings();
   saveSettings();

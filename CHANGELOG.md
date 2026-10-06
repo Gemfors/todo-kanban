@@ -3,6 +3,12 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.3.2 – 2026-10-06
+
+### Fixed
+- The taskbar showed Electron's default atom icon. The window now tells Windows explicitly to use the kanban icon from the program file, and uses the .ico version of the icon on Windows.
+- The program file (Todo Kanban.exe) itself now carries the kanban icon (patched in place; original kept as `Todo Kanban.exe.orig-1.0.0`).
+
 ## 1.3.1 – 2026-10-06
 
 ### Changed
