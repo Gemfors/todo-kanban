@@ -3,6 +3,13 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.4.1 – 2026-10-06
+
+### Changed
+- W and E now work on the card under the mouse pointer. Before, they needed a card selected with Tab, while a click moves a card and a double-click opens the editor.
+- New right-click menu on cards: Waiting for… (W), Edit (E), Move to …, Delete. Arrow keys, Enter and the letter shortcuts work inside it.
+- Helper text and the shortcut list explain the mouse options.
+
 ## 1.4.0 – 2026-10-06
 
 ### Added

@@ -693,6 +693,12 @@ function createCard(task) {
     }, CLICK_DELAY_MS);
   });
 
+  card.addEventListener('contextmenu', event => {
+    event.preventDefault();
+    clearTimeout(pendingClickTimer);
+    openCardMenu(task.id, event.clientX, event.clientY);
+  });
+
   card.addEventListener('dblclick', event => {
     if (event.target.closest('button')) return;
     clearTimeout(pendingClickTimer);
@@ -1349,7 +1355,11 @@ function openShortcuts() {
     ['Ctrl+Y / Ctrl+Shift+Z', 'Redo'],
     ['?', 'Show this list'],
     ['Esc', 'Close dialog / leave a text field'],
-    ['', 'With a card selected (click Tab to move between cards):'],
+    ['', 'With the mouse over a card:'],
+    ['W', 'Mark as waiting for someone / no longer waiting'],
+    ['E', 'Edit task and notes'],
+    ['Right-click', 'Menu: waiting, edit, move, delete'],
+    ['', 'With a card selected using the keyboard (Tab):'],
     ['Enter / →', 'Move to the next step'],
     ['←', 'Move back one step'],
     ['↑ / ↓', 'Select the card above / below'],
@@ -1385,6 +1395,117 @@ function openShortcuts() {
 }
 
 /* ================= Keyboard ================= */
+
+/* ---------- Card under the mouse ---------- */
+
+// W and E act on the card under the mouse pointer, so you don't have to select it first
+// (a click moves the card and a double-click opens the editor).
+let pointer = null;
+document.addEventListener('mousemove', event => {
+  pointer = { x: event.clientX, y: event.clientY };
+}, { passive: true });
+document.documentElement.addEventListener('mouseleave', () => {
+  pointer = null;
+});
+window.addEventListener('blur', () => {
+  pointer = null;
+});
+
+function cardUnderPointer() {
+  if (!pointer) return null;
+  const element = document.elementFromPoint(pointer.x, pointer.y);
+  return element && element.closest ? element.closest('.task-card') : null;
+}
+
+/* ---------- Right-click menu on cards ---------- */
+
+let cardMenu = null;
+
+function closeCardMenu() {
+  if (!cardMenu) return;
+  cardMenu.element.remove();
+  cardMenu = null;
+}
+
+function openCardMenu(taskId, x, y) {
+  closeCardMenu();
+  const task = getTask(taskId);
+  if (!task) return;
+
+  const element = make('div', 'context-menu');
+  element.setAttribute('role', 'menu');
+
+  const items = [];
+  const addItem = (label, shortcut, action, className = '') => {
+    const item = make('button', `context-menu-item ${className}`.trim());
+    item.type = 'button';
+    item.setAttribute('role', 'menuitem');
+    item.append(make('span', 'context-menu-label', label));
+    if (shortcut) item.append(make('kbd', '', shortcut));
+    item.addEventListener('click', () => {
+      closeCardMenu();
+      action();
+    });
+    element.appendChild(item);
+    items.push({ item, shortcut, action });
+  };
+  const addSeparator = () => element.appendChild(make('div', 'context-menu-separator'));
+
+  addItem(task.waitingFor ? '⏳ No longer waiting' : '⏳ Waiting for…', 'W', () => toggleWaiting(taskId));
+  addItem('✏️ Edit', 'E', () => openEditor(taskId));
+  addSeparator();
+  ['pool', 'todo', 'doing', 'done']
+    .filter(column => column !== task.column)
+    .forEach(column => addItem(`Move to ${COLUMN_LABELS[column]}`, '', () => commit(() => moveTask(taskId, column))));
+  addSeparator();
+  addItem('Delete', 'Del', () => deleteTask(taskId), 'context-menu-danger');
+
+  document.body.appendChild(element);
+
+  // Keep the menu inside the window.
+  const box = element.getBoundingClientRect();
+  const left = Math.min(x, window.innerWidth - box.width - 8);
+  const top = y + box.height > window.innerHeight - 8 ? Math.max(8, y - box.height) : y;
+  element.style.left = `${Math.max(8, left)}px`;
+  element.style.top = `${top}px`;
+
+  cardMenu = { element, items, taskId };
+  items[0].item.focus();
+}
+
+document.addEventListener('mousedown', event => {
+  if (cardMenu && !cardMenu.element.contains(event.target)) closeCardMenu();
+}, true);
+window.addEventListener('blur', closeCardMenu);
+window.addEventListener('resize', closeCardMenu);
+document.addEventListener('scroll', closeCardMenu, true);
+
+function handleCardMenuKey(event) {
+  const buttons = cardMenu.items.map(entry => entry.item);
+  const index = buttons.indexOf(document.activeElement);
+  const key = event.key;
+
+  if (key === 'Escape') {
+    event.preventDefault();
+    closeCardMenu();
+  } else if (key === 'ArrowDown' || key === 'ArrowUp') {
+    event.preventDefault();
+    const step = key === 'ArrowDown' ? 1 : -1;
+    buttons[(index + step + buttons.length) % buttons.length].focus();
+  } else if (key === 'Tab') {
+    event.preventDefault();
+  } else if (key === 'Enter' || key === ' ') {
+    event.preventDefault();
+    if (index >= 0) buttons[index].click();
+  } else {
+    const shortcut = key === 'Delete' || key === 'Backspace' ? 'Del' : key.toUpperCase();
+    const entry = cardMenu.items.find(item => item.shortcut === shortcut);
+    if (entry) {
+      event.preventDefault();
+      entry.item.click();
+    }
+  }
+}
 
 function focusNewTaskInput(projectId) {
   let project = getProject(projectId) || getProject(lastProjectId) || state.projects[0];
@@ -1463,6 +1584,11 @@ function handleCardKey(event, card) {
 }
 
 document.addEventListener('keydown', event => {
+  if (cardMenu) {
+    handleCardMenuKey(event);
+    return;
+  }
+
   if (currentModal) {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -1494,6 +1620,17 @@ document.addEventListener('keydown', event => {
   }
 
   if (mod || event.altKey) return;
+
+  // W/E: the card under the mouse wins over a card that merely has focus from an earlier click.
+  if (key === 'w' || key === 'e') {
+    const hovered = cardUnderPointer();
+    if (hovered) {
+      event.preventDefault();
+      if (key === 'w') toggleWaiting(hovered.dataset.taskId);
+      else openEditor(hovered.dataset.taskId);
+      return;
+    }
+  }
 
   const card = event.target.closest ? event.target.closest('.task-card') : null;
   if (card && handleCardKey(event, card)) return;
