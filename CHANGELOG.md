@@ -3,7 +3,16 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
-## 1.7.0 – 2026-10-06
+## 1.8.0 – 2026-10-06
+
+### Added
+- Dark mode. The app follows the Windows light/dark setting automatically, and View → Theme lets you force Light or Dark (remembered). It covers the board, Task Pool, dialogs, right-click menus, the archive, messages and the quick-add box. Project colours and tags stay the same, and the important text keeps a high contrast in both themes.
+
+### Changed
+- All colours now come from `theme.css` (light and dark tokens). The light theme looks the same as before.
+- Windows open with a background matching the theme, so there's no white flash in dark mode.
+
+
 
 ### Added
 - Search on the board: the search field at the top right (or press / or Ctrl+F). Cards that don't match fade out on the Today board and in the Task Pool; it searches the task text, notes, the waiting-for name and the project name/label, and all words must match. A collapsed project opens while it has matches. Enter jumps to the first match, Esc clears.

@@ -1,0 +1,113 @@
+/*
+ * Colour tokens for light and dark. The app follows the Windows setting; View → Theme can force
+ * light or dark (main process sets nativeTheme.themeSource, which drives prefers-color-scheme).
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --surface: #ffffff;
+  --app-bg: #f6f7fb;
+  --pool-bg: #e9e9e9;
+  --column-bg: #f8f9fc;
+  --border: #e4e7eb;
+  --card-border: #e3e6ea;
+  --divider: #dddddd;
+  --fill: #eef1f6;
+  --fill-hover: #e2e6ee;
+  --fill-soft: #f5f7fa;
+  --input-border: #d6dbe3;
+  --border-strong: #cbd2d9;
+
+  --text: #1f2933;
+  --text-2: #3e4c59;
+  --text-3: #52606d;
+  --muted: #7b8794;
+  --muted-2: #9aa5b1;
+
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-strong: #4338ca;
+  --link-hover: #3730a3;
+  --primary-soft: #eef2ff;
+  --primary-soft-hover: #e0e7ff;
+  --focus: #9aa6ff;
+  --focus-ring: rgba(79, 70, 229, 0.12);
+  --focus-ring-strong: rgba(79, 70, 229, 0.22);
+
+  --danger: #b91c1c;
+  --danger-soft: #fde8e8;
+  --warn: #c2410c;
+  --warn-soft: #ffedd5;
+  --warn-border: #fdba74;
+  --success: #047857;
+
+  --waiting-bg: #fcfcfd;
+  --drop-bg: #f1f5ff;
+  --drop-border: #b8c7ff;
+  --actions-bg: rgba(255, 255, 255, 0.96);
+  --backdrop: rgba(15, 23, 42, 0.35);
+  --toast-bg: #1f2933;
+  --qa-border: #c7cdf7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #1d2128;
+    --app-bg: #15181d;
+    --pool-bg: #111317;
+    --column-bg: #191c22;
+    --border: #2b3139;
+    --card-border: #343b45;
+    --divider: #2b3139;
+    --fill: #2a3039;
+    --fill-hover: #353c47;
+    --fill-soft: #23282f;
+    --input-border: #3b434e;
+    --border-strong: #4a525e;
+
+    --text: #e6e9ee;
+    --text-2: #cdd3db;
+    --text-3: #aeb6c1;
+    --muted: #8f99a6;
+    --muted-2: #6f7985;
+
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --primary-strong: #a5b4fc;
+    --link-hover: #c7d2fe;
+    --primary-soft: #272c4d;
+    --primary-soft-hover: #31376a;
+    --focus: #7c83f7;
+    --focus-ring: rgba(124, 131, 247, 0.22);
+    --focus-ring-strong: rgba(124, 131, 247, 0.32);
+
+    --danger: #f87171;
+    --danger-soft: #3a1f22;
+    --warn: #fb923c;
+    --warn-soft: #3b2716;
+    --warn-border: #9a5b22;
+    --success: #34d399;
+
+    --waiting-bg: #1a1d23;
+    --drop-bg: #1e2340;
+    --drop-border: #4f5bd5;
+    --actions-bg: rgba(29, 33, 40, 0.96);
+    --backdrop: rgba(0, 0, 0, 0.55);
+    --toast-bg: #353c47;
+    --qa-border: #3f4680;
+  }
+}
+
+/* Form controls take the theme colours unless a rule says otherwise. */
+input,
+select,
+textarea {
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted-2);
+}

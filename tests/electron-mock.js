@@ -6,7 +6,7 @@ class WC { constructor(w){ this.w=w; this.sent=[]; this.once={}; this.ev={}; } s
 class BW { constructor(o){ this.opts=o; this.ev={}; this.visible=!!(o.show!==false); this.webContents=new WC(this); this.maximized=false; S.windows.push(this); }
   on(e,cb){ (this.ev[e] ||= []).push(cb); } emit(e,...a){ (this.ev[e]||[]).forEach(cb=>cb(...a)); }
   loadFile(f){ this.file=f; } show(){ this.visible=true; } hide(){ this.visible=false; } focus(){} isVisible(){ return this.visible; }
-  maximize(){ this.maximized=true; this.visible=true; } isMinimized(){ return false; } restore(){} setBounds(b){ this.bounds=b; } getBounds(){ return this.bounds||{x:0,y:0,width:640,height:150}; } setMenu(m){ this.menu=m; } setAppDetails(d){ this.appDetails=d; }
+  maximize(){ this.maximized=true; this.visible=true; } isMinimized(){ return false; } restore(){} setBounds(b){ this.bounds=b; } getBounds(){ return this.bounds||{x:0,y:0,width:640,height:150}; } setMenu(m){ this.menu=m; } setAppDetails(d){ this.appDetails=d; } setBackgroundColor(c){ this.bg=c; }
   setAlwaysOnTop(){} isDestroyed(){ return false; } getNormalBounds(){ return {x:0,y:0,width:900,height:700}; } isMaximized(){ return this.maximized; }
   close(){ let prevented=false; this.emit('close', { preventDefault(){ prevented=true; } }); if(!prevented){ this.closed=true; this.emit('closed'); } return prevented; } }
 class Tray { constructor(icon){ this.icon=icon; S.tray=this; this.ev={}; } on(e,cb){ this.ev[e]=cb; } setToolTip(t){ this.tip=t; } setContextMenu(m){ this.menu=m; } displayBalloon(b){ S.balloons.push(b); } }
@@ -22,5 +22,11 @@ module.exports = {
   screen: { getAllDisplays: () => [{ workArea: { x:0, y:0, width:1920, height:1080 } }], getCursorScreenPoint: () => ({x:2500,y:100}),
     getDisplayNearestPoint: () => ({ workArea: { x:1920, y:0, width:2560, height:1440 } }) },
   shell: { openPath(p){ S.opened = p; }, openExternal(u){ (S.external ||= []).push(u); } },
-  powerMonitor: { on(e, cb){ (S.power ||= {})[e] = cb; } }
+  powerMonitor: { on(e, cb){ (S.power ||= {})[e] = cb; } },
+  nativeTheme: S.nativeTheme = {
+    themeSource: 'system', systemDark: false, listeners: [],
+    get shouldUseDarkColors(){ return this.themeSource === 'dark' || (this.themeSource === 'system' && this.systemDark); },
+    on(e, cb){ if (e === 'updated') this.listeners.push(cb); },
+    emitUpdated(){ this.listeners.forEach(cb => cb()); }
+  }
 };

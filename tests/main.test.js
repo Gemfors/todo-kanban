@@ -15,7 +15,8 @@ const SCENARIOS = [
   { name: 'dev', env: { PKG: '0' } },
   { name: 'win32', env: {} },
   { name: 'data', env: {} },
-  { name: 'onedrive', env: { ONEDRIVE_FROM_UD: '1' } }
+  { name: 'onedrive', env: { ONEDRIVE_FROM_UD: '1' } },
+  { name: 'theme', env: {} }
 ];
 
 if (!process.env.MAIN_TEST_SCENARIO) {
@@ -192,6 +193,21 @@ S.ready();
     assert(JSON.parse(fs.readFileSync(path.join(ud, 'settings.json'))).oneDriveBackup === false, 'setting remembered');
     S.power.resume();
     assert(main.webContents.sent.some(m => m[0] === 'app:command' && m[1] === 'day-check'), 'waking the PC asks the board to check for a new day');
+  }
+  if (scenario === 'theme') {
+    const nt = S.nativeTheme;
+    assert(nt.themeSource === 'system', 'follows Windows by default');
+    assert(main.opts.backgroundColor === '#ffffff', 'light window background when Windows is light');
+    const themeMenu = () => S.menu.find(m => m.label === 'View').submenu.find(i => i.label === 'Theme').submenu;
+    assert(JSON.stringify(themeMenu().map(i => i.label)) === JSON.stringify(['Same as Windows', 'Light', 'Dark']) && themeMenu()[0].checked, 'View → Theme menu');
+    themeMenu()[2].click();
+    assert(nt.themeSource === 'dark' && JSON.parse(fs.readFileSync(path.join(ud, 'settings.json'))).theme === 'dark', 'choosing Dark switches and is remembered');
+    assert(themeMenu()[2].checked && !themeMenu()[0].checked, 'menu shows the choice');
+    nt.emitUpdated();
+    assert(main.bg === '#15181d' && qa.bg === '#15181d', 'window backgrounds follow the theme (no white flash)');
+    themeMenu()[0].click();
+    nt.systemDark = true; nt.emitUpdated();
+    assert(nt.themeSource === 'system' && main.bg === '#15181d', 'back to Windows setting; dark Windows gives dark');
   }
   done();
 })();

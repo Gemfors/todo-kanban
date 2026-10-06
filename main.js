@@ -3,7 +3,7 @@ const path = require('path');
 const {
   app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, screen, shell
 } = require('electron');
-const { powerMonitor } = require('electron');
+const { powerMonitor, nativeTheme } = require('electron');
 
 const userDataDir = app.getPath('userData');
 const stateFile = path.join(userDataDir, 'window-state.json');
@@ -73,6 +73,7 @@ function loadSettings() {
     trayHintShown: false,
     lastQuickAddProjectId: null,
     oneDriveBackup: true,
+    theme: 'system', // 'system' | 'light' | 'dark'
     ...saved
   };
 }
@@ -378,7 +379,7 @@ function createQuickAddWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     title: 'Quick add',
-    backgroundColor: '#ffffff',
+    backgroundColor: windowBackground(),
     icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, 'quickadd-preload.js'),
@@ -653,6 +654,20 @@ function buildMenu() {
       submenu: [
         { label: 'Archive', click: () => sendCommand('archive') },
         { type: 'separator' },
+        {
+          label: 'Theme',
+          submenu: [
+            ['system', 'Same as Windows'],
+            ['light', 'Light'],
+            ['dark', 'Dark']
+          ].map(([value, label]) => ({
+            label,
+            type: 'radio',
+            checked: (settings.theme || 'system') === value,
+            click: () => setTheme(value)
+          }))
+        },
+        { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
@@ -689,6 +704,34 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/* ---------- Theme ---------- */
+
+const THEMES = ['system', 'light', 'dark'];
+
+// Electron's nativeTheme drives prefers-color-scheme in both windows, so the CSS follows it.
+function applyTheme() {
+  nativeTheme.themeSource = THEMES.includes(settings.theme) ? settings.theme : 'system';
+}
+
+function windowBackground() {
+  return nativeTheme.shouldUseDarkColors ? '#15181d' : '#ffffff';
+}
+
+function setTheme(theme) {
+  settings.theme = THEMES.includes(theme) ? theme : 'system';
+  saveSettings();
+  applyTheme();
+  buildMenu();
+}
+
+function watchTheme() {
+  nativeTheme.on('updated', () => {
+    [mainWindow, quickAddWindow].forEach(win => {
+      if (win && !win.isDestroyed()) win.setBackgroundColor(windowBackground());
+    });
+  });
+}
+
 /* ---------- Main window ---------- */
 
 function showMainWindow() {
@@ -710,6 +753,7 @@ function createWindow() {
   const onScreen = isOnSomeDisplay(windowState);
 
   mainWindow = new BrowserWindow({
+    backgroundColor: windowBackground(),
     width: windowState.width || 1200,
     height: windowState.height || 800,
     x: onScreen ? windowState.x : undefined,
@@ -786,6 +830,8 @@ app.whenReady().then(() => {
 
   settings = loadSettings();
   saveSettings();
+  applyTheme();
+  watchTheme();
   applyStartWithWindows();
 
   createTray();
