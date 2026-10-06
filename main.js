@@ -13,8 +13,9 @@ const dailyBackupDir = path.join(userDataDir, 'backups');
 const DAILY_BACKUPS_TO_KEEP = 14;
 
 const DEFAULT_QUICK_ADD_SHORTCUT = 'CommandOrControl+Alt+K';
-const QUICK_ADD_WIDTH = 580;
-const QUICK_ADD_HEIGHT = 116;
+const QUICK_ADD_WIDTH = 640;
+const QUICK_ADD_MIN_HEIGHT = 90;
+const QUICK_ADD_MAX_HEIGHT = 420;
 
 const startHidden = process.argv.includes('--hidden');
 
@@ -26,6 +27,8 @@ let isQuitting = false;
 let pendingMaximize = false;
 let registeredShortcut = null;
 let settings = {};
+let quickAddHeight = 150; // updated by the quick-add page to fit its content
+let pendingQuickAddShow = null;
 
 // Only one instance may run, otherwise two windows would overwrite each other's data file.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -285,7 +288,7 @@ function sendCommand(command) {
 function createQuickAddWindow() {
   quickAddWindow = new BrowserWindow({
     width: QUICK_ADD_WIDTH,
-    height: QUICK_ADD_HEIGHT,
+    height: quickAddHeight,
     show: false,
     frame: false,
     resizable: false,
@@ -305,6 +308,7 @@ function createQuickAddWindow() {
   });
 
   quickAddWindow.setAlwaysOnTop(true, 'screen-saver');
+  quickAddWindow.setMenu(null); // no app-menu shortcuts (Ctrl+W, Alt+F…) inside the box
   quickAddWindow.loadFile('quickadd.html');
 
   quickAddWindow.on('blur', () => {
@@ -328,24 +332,35 @@ function quickAddPayload() {
   };
 }
 
+function clampQuickAddHeight(height) {
+  const value = Math.round(Number(height) || quickAddHeight);
+  return Math.min(QUICK_ADD_MAX_HEIGHT, Math.max(QUICK_ADD_MIN_HEIGHT, value));
+}
+
 function showQuickAdd() {
   if (!quickAddWindow || quickAddWindow.isDestroyed()) createQuickAddWindow();
 
   const win = quickAddWindow;
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const area = display.workArea;
+  const x = Math.round(area.x + (area.width - QUICK_ADD_WIDTH) / 2);
+  const y = Math.round(area.y + area.height * 0.22);
 
-  win.setBounds({
-    x: Math.round(area.x + (area.width - QUICK_ADD_WIDTH) / 2),
-    y: Math.round(area.y + area.height * 0.22),
-    width: QUICK_ADD_WIDTH,
-    height: QUICK_ADD_HEIGHT
-  });
+  // The page renders the project list, reports its height ('quickadd:ready'), and only
+  // then is the box shown, so it never flickers at the wrong size.
+  const reveal = height => {
+    if (pendingQuickAddShow !== reveal) return;
+    pendingQuickAddShow = null;
+    if (height) quickAddHeight = clampQuickAddHeight(height);
+    win.setBounds({ x, y, width: QUICK_ADD_WIDTH, height: quickAddHeight });
+    win.show();
+    win.focus();
+  };
+  pendingQuickAddShow = reveal;
 
   const open = () => {
     win.webContents.send('quickadd:open', quickAddPayload());
-    win.show();
-    win.focus();
+    setTimeout(() => reveal(null), 300); // fallback if the page doesn't answer
   };
 
   if (win.webContents.isLoading()) {
@@ -354,6 +369,17 @@ function showQuickAdd() {
     open();
   }
 }
+
+ipcMain.on('quickadd:ready', (_event, height) => {
+  if (pendingQuickAddShow) pendingQuickAddShow(height);
+});
+
+ipcMain.on('quickadd:resize', (_event, height) => {
+  if (!quickAddWindow || quickAddWindow.isDestroyed()) return;
+  quickAddHeight = clampQuickAddHeight(height);
+  const bounds = quickAddWindow.getBounds();
+  quickAddWindow.setBounds({ ...bounds, height: quickAddHeight });
+});
 
 ipcMain.on('quickadd:submit', (_event, task) => {
   const text = task && typeof task.text === 'string' ? task.text.trim() : '';

@@ -7,20 +7,24 @@
   <link rel="stylesheet" href="quickadd.css">
 </head>
 <body>
-  <div class="qa">
+  <div class="qa" id="qa">
     <div class="qa-row">
       <span class="qa-dot" id="qa-dot"></span>
-      <input id="qa-text" type="text" autocomplete="off" spellcheck="true"
-             placeholder="Add a task…   #name picks the project">
-      <select id="qa-project" title="Project"></select>
+      <input id="qa-text" type="text" autocomplete="off" spellcheck="true" placeholder="Add a task…">
     </div>
-    <div class="qa-hint" id="qa-hint">
-      <span><kbd>Enter</kbd> Task Pool</span>
-      <span><kbd>Ctrl</kbd>+<kbd>Enter</kbd> To Do</span>
-      <span><kbd>Shift</kbd>+<kbd>Enter</kbd> add another</span>
-      <span><kbd>Esc</kbd> close</span>
+
+    <div class="qa-projects" id="qa-projects" role="listbox" aria-label="Project"></div>
+
+    <div class="qa-footer">
+      <div class="qa-hint" id="qa-hint">
+        <span><kbd>↑↓</kbd> <kbd>Alt+1–9</kbd> project</span>
+        <span><kbd>Enter</kbd> Task Pool</span>
+        <span><kbd>Ctrl+Enter</kbd> To Do</span>
+        <span><kbd>Shift+Enter</kbd> add another</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
+      <div class="qa-status" id="qa-status" hidden></div>
     </div>
-    <div class="qa-status" id="qa-status" hidden></div>
   </div>
   <script src="quickadd.js"></script>
 </body>

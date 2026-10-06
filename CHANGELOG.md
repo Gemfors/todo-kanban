@@ -3,6 +3,15 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.3.0 – 2026-10-06
+
+### Added
+- Quick add: choose the project with the keyboard while typing. ↑/↓ (or Tab/Shift+Tab) step through the projects, and Alt+1–9 (or Ctrl+1–9) jump to a numbered one. The projects are shown as numbered chips under the text field, with the selected one highlighted.
+
+### Changed
+- The project dropdown in quick add is replaced by the chips; `#name` still works.
+- The quick-add box sizes itself to fit your projects and has no app-menu shortcuts inside it.
+
 ## 1.2.0 – 2026-10-06
 
 ### Added
