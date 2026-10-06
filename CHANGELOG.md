@@ -3,6 +3,12 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.3.3 – 2026-10-06
+
+### Fixed
+- Taskbar still showed the atom icon: the window now has its own app id (`com.olle.todo-kanban.board`), so Windows no longer matches it to the installer's Start-menu shortcut and the icon cached for it. The icon is copied to the data folder under a new file name and used for the window, the tray and the pinned taskbar item.
+- To pin the app, right-click its taskbar button while it's running and choose "Pin to taskbar".
+
 ## 1.3.2 – 2026-10-06
 
 ### Fixed

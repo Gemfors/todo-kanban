@@ -12,7 +12,11 @@ const dataBackupFile = path.join(userDataDir, 'kanban-data.bak.json');
 const dailyBackupDir = path.join(userDataDir, 'backups');
 const DAILY_BACKUPS_TO_KEEP = 14;
 
-const APP_ID = 'com.olle.todo-kanban';
+// Deliberately different from the installer's id (com.olle.todo-kanban): with the old id the
+// taskbar matched the window to the Start-menu shortcut and kept showing the icon it had
+// cached for it (Electron's atom). With its own id the window's own icon is used.
+const APP_ID = 'com.olle.todo-kanban.board';
+const ICON_FILE_NAME = 'todo-kanban-icon-v2.ico'; // new name = nothing cached for it yet
 const DEFAULT_QUICK_ADD_SHORTCUT = 'CommandOrControl+Alt+K';
 const QUICK_ADD_WIDTH = 640;
 const QUICK_ADD_MIN_HEIGHT = 90;
@@ -434,14 +438,32 @@ function registerQuickAddShortcut() {
 
 /* ---------- Tray and start with Windows ---------- */
 
+let cachedIconPath = null;
+
+// Windows wants a real file (not one inside app.asar) for taskbar/relaunch icons, so copy the
+// icon to the data folder once.
 function windowIconPath() {
-  return path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
+  if (process.platform !== 'win32') return path.join(__dirname, 'assets', 'icon.png');
+  if (cachedIconPath) return cachedIconPath;
+
+  const bundled = path.join(__dirname, 'assets', 'icon.ico');
+  const target = path.join(userDataDir, 'icons', ICON_FILE_NAME);
+  try {
+    const data = fs.readFileSync(bundled);
+    if (!fs.existsSync(target) || fs.statSync(target).size !== data.length) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, data);
+    }
+    cachedIconPath = target;
+  } catch (err) {
+    console.error('Could not copy the app icon', err);
+    cachedIconPath = bundled;
+  }
+  return cachedIconPath;
 }
 
 function trayIconPath() {
-  return process.platform === 'win32'
-    ? path.join(__dirname, 'assets', 'icon.ico')
-    : path.join(__dirname, 'assets', 'tray.png');
+  return process.platform === 'win32' ? windowIconPath() : path.join(__dirname, 'assets', 'tray.png');
 }
 
 function applyStartWithWindows() {
@@ -614,11 +636,10 @@ function createWindow() {
 
   // Tell the Windows taskbar explicitly which icon to use for this window. Without this it
   // falls back to whatever it has cached for the app id (Electron's default atom icon).
-  // The installed exe carries the kanban icon, so point at that.
   if (process.platform === 'win32' && app.isPackaged) {
     mainWindow.setAppDetails({
       appId: APP_ID,
-      appIconPath: process.execPath,
+      appIconPath: windowIconPath(),
       appIconIndex: 0,
       relaunchCommand: `"${process.execPath}"`,
       relaunchDisplayName: 'Todo Kanban'
