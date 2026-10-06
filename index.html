@@ -15,6 +15,11 @@
           <p class="helper-text">Click a card to move it to the next step, double-click to edit it, or drag it anywhere. Point at a card and press <kbd>W</kbd> to mark it as waiting, or right-click it for more. <kbd>?</kbd> shows all shortcuts.</p>
         </div>
         <div class="board-actions">
+          <label class="board-search" title="Search the board (/ or Ctrl+F)">
+            <span class="board-search-icon" aria-hidden="true">⌕</span>
+            <input id="board-search" type="search" placeholder="Search  ( / )" autocomplete="off" spellcheck="false">
+            <span id="board-search-count" class="board-search-count" hidden></span>
+          </label>
           <button id="archive-button" type="button" title="Archived tasks">Archive</button>
           <button id="shortcuts-button" type="button" title="Keyboard shortcuts (?)">?</button>
         </div>

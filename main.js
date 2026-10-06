@@ -278,6 +278,22 @@ function saveData(data) {
 }
 
 ipcMain.handle('data:load', () => loadData());
+
+// Links from notes open in the default browser – only web links, never files or other schemes.
+function isWebLink(url) {
+  try {
+    const parsed = new URL(String(url));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle('link:open', (_event, url) => {
+  if (!isWebLink(url)) return false;
+  shell.openExternal(String(url));
+  return true;
+});
 ipcMain.handle('data:save', (_event, data) => {
   saveData(data);
   return true;
@@ -721,6 +737,16 @@ function createWindow() {
       relaunchDisplayName: 'Todo Kanban'
     });
   }
+
+  // Never navigate the board window away or open new windows; web links go to the browser.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isWebLink(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    if (isWebLink(url)) shell.openExternal(url);
+  });
 
   // Keep the version in the title bar instead of the page's <title>.
   mainWindow.on('page-title-updated', event => event.preventDefault());

@@ -4,6 +4,7 @@ Run all with `npm test` (or `node tests/run-all.js --verbose` for every check).
 
 - `archive.test.js` – auto-clear of Done each morning, the Done header menu, the archive view (search, project filter, days).
 - `board.test.js` – board window: migration from the old storage, moving cards, editor and notes, project rename/delete, archive, undo/redo, keyboard shortcuts, drag and drop, load errors.
+- `search-links.test.js` – search on the board, 🔗 links on cards, in the editor and in the archive.
 - `waiting.test.js` – "Waiting for" marks, plus tasks arriving from quick add.
 - `mouse.test.js` – W/E on the card under the mouse, the right-click menu.
 - `quickadd.test.js` – the quick-add box: project chips, ↑↓ / Alt+1–9, #tags, Enter variants.

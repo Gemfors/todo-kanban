@@ -168,6 +168,73 @@ function paintProjectTag(tag, color) {
   tag.style.color = readableTextColor(color);
 }
 
+/* ---------- Links in notes ---------- */
+
+// http(s) links in a text, without trailing punctuation like "." or ")" that isn't part of the URL.
+function findLinks(text) {
+  const links = [];
+  const pattern = /\bhttps?:\/\/[^\s<>"']+/gi;
+  let match;
+  while ((match = pattern.exec(String(text || '')))) {
+    let url = match[0];
+    while (/[.,;:!?)\]}]$/.test(url)) {
+      const last = url.slice(-1);
+      const open = { ')': '(', ']': '[', '}': '{' }[last];
+      if (open && url.split(open).length > url.split(last).length - 1) break; // balanced, keep it
+      url = url.slice(0, -1);
+    }
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') links.push({ url, index: match.index });
+    } catch {
+      /* not a valid URL */
+    }
+  }
+  return links;
+}
+
+function linkLabel(url) {
+  try {
+    const parsed = new URL(url);
+    const pathPart = decodeURIComponent(parsed.pathname + parsed.search).replace(/\/$/, '');
+    const short = pathPart.length > 40 ? `${pathPart.slice(0, 38)}…` : pathPart;
+    return `${parsed.hostname.replace(/^www\./, '')}${short}`;
+  } catch {
+    return url;
+  }
+}
+
+function openLink(url) {
+  if (!/^https?:\/\//i.test(url)) return;
+  if (storage && typeof storage.openExternal === 'function') {
+    storage.openExternal(url);
+  } else {
+    window.open(url, '_blank', 'noopener');
+  }
+}
+
+// Text with its links turned into clickable anchors (everything else stays plain text).
+function linkifiedText(text, className) {
+  const container = make('div', className);
+  const value = String(text || '');
+  let position = 0;
+  findLinks(value).forEach(link => {
+    container.append(value.slice(position, link.index));
+    const anchor = make('a', 'note-link', link.url);
+    anchor.href = link.url;
+    anchor.title = link.url;
+    anchor.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openLink(link.url);
+    });
+    container.append(anchor);
+    position = link.index + link.url.length;
+  });
+  container.append(value.slice(position));
+  return container;
+}
+
 function formatDate(iso) {
   if (!iso) return '';
   const date = new Date(iso);
@@ -735,9 +802,73 @@ function render() {
   renderBoard();
   renderProjects();
   renderArchiveButton();
+  applyBoardSearch();
   if (currentModal && currentModal.kind === 'archive') renderArchiveList(currentModal);
   restoreUi(ui);
 }
+
+/* ---------- Search on the board ---------- */
+
+const boardSearch = document.querySelector('#board-search');
+const boardSearchCount = document.querySelector('#board-search-count');
+
+function taskSearchText(task) {
+  const project = getProject(task.projectId);
+  return [
+    task.text,
+    task.notes,
+    task.waitingFor ? task.waitingFor.who : '',
+    project ? project.name : '',
+    project ? projectLabel(project.id) : ''
+  ].join(' ').toLocaleLowerCase('sv');
+}
+
+function applyBoardSearch() {
+  const words = boardSearch.value.toLocaleLowerCase('sv').split(/\s+/).filter(Boolean);
+  const active = words.length > 0;
+  document.body.classList.toggle('searching', active);
+
+  let matches = 0;
+  document.querySelectorAll('.task-card[data-task-id]').forEach(card => {
+    const task = getTask(card.dataset.taskId);
+    const hit = active && task && words.every(word => taskSearchText(task).includes(word));
+    card.classList.toggle('search-hit', Boolean(hit));
+    card.classList.toggle('search-miss', active && !hit);
+    if (hit) matches++;
+  });
+
+  // Collapsed projects open up while they have matches.
+  document.querySelectorAll('.project-section').forEach(section => {
+    section.classList.toggle('search-has-hit', active && Boolean(section.querySelector('.search-hit')));
+  });
+
+  boardSearchCount.hidden = !active;
+  boardSearchCount.textContent = matches === 1 ? '1 match' : `${matches} matches`;
+  boardSearch.parentElement.classList.toggle('no-hits', active && matches === 0);
+}
+
+function focusBoardSearch() {
+  boardSearch.focus();
+  boardSearch.select();
+}
+
+boardSearch.addEventListener('input', applyBoardSearch);
+boardSearch.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    boardSearch.value = '';
+    applyBoardSearch();
+    boardSearch.blur();
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    const first = document.querySelector('.task-card.search-hit');
+    if (first) {
+      first.focus();
+      first.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
+});
 
 function renderBoard() {
   BOARD_COLUMNS.forEach(column => {
@@ -794,6 +925,22 @@ function createCard(task) {
     const notesIndicator = make('span', 'notes-indicator', '📝');
     notesIndicator.title = task.notes.length > 300 ? `${task.notes.slice(0, 300)}…` : task.notes;
     meta.appendChild(notesIndicator);
+
+    const links = findLinks(task.notes);
+    if (links.length) {
+      const linkButton = make('button', 'link-button', links.length > 1 ? `🔗 ${links.length}` : '🔗');
+      linkButton.type = 'button';
+      linkButton.tabIndex = -1;
+      linkButton.title = links.length > 1
+        ? `Open ${linkLabel(links[0].url)}\n(right-click the card for all ${links.length} links)`
+        : `Open ${linkLabel(links[0].url)}`;
+      linkButton.addEventListener('click', event => {
+        event.stopPropagation();
+        openLink(links[0].url);
+      });
+      linkButton.addEventListener('dblclick', event => event.stopPropagation());
+      meta.appendChild(linkButton);
+    }
   }
   if (meta.childElementCount) body.appendChild(meta);
 
@@ -1427,6 +1574,26 @@ function openEditor(taskId) {
   notesInput.placeholder = 'Details, links, next steps…';
   notesLabel.appendChild(notesInput);
 
+  // Links found in the notes, clickable (a textarea can't hold real links).
+  const linkList = make('div', 'editor-links');
+  const renderLinks = () => {
+    const links = findLinks(notesInput.value);
+    linkList.replaceChildren();
+    linkList.hidden = links.length === 0;
+    links.forEach(link => {
+      const anchor = make('a', 'note-link', `🔗 ${linkLabel(link.url)}`);
+      anchor.href = link.url;
+      anchor.title = link.url;
+      anchor.addEventListener('click', event => {
+        event.preventDefault();
+        openLink(link.url);
+      });
+      linkList.appendChild(anchor);
+    });
+  };
+  notesInput.addEventListener('input', renderLinks);
+  renderLinks();
+
   const waitingField = make('div', 'field waiting-field');
   const waitingToggleLabel = make('label', 'checkbox-label');
   const waitingCheckbox = document.createElement('input');
@@ -1455,7 +1622,7 @@ function openEditor(taskId) {
     `In ${COLUMN_LABELS[task.column]} · created ${formatDate(task.createdAt)}` +
     (task.updatedAt && task.updatedAt !== task.createdAt ? ` · updated ${formatDate(task.updatedAt)}` : ''));
 
-  modal.body.append(titleLabel, projectLabel, waitingField, notesLabel, meta);
+  modal.body.append(titleLabel, projectLabel, waitingField, notesLabel, linkList, meta);
 
   function saveEdits() {
     const text = titleInput.value.trim() || task.text;
@@ -1673,7 +1840,7 @@ function createArchiveRow(item) {
   info.appendChild(make('div', 'archive-text', item.text));
   const projectName = project ? project.name : (item.projectName ? `${item.projectName} (deleted)` : '');
   info.appendChild(make('div', 'archive-meta', [projectName, `archived ${formatDate(item.archivedAt)}`].filter(Boolean).join(' · ')));
-  if (item.notes) info.appendChild(make('div', 'archive-notes', item.notes));
+  if (item.notes) info.appendChild(linkifiedText(item.notes, 'archive-notes'));
 
   const restore = modalButton('Restore', '', () => restoreFromArchive(item.id));
   restore.title = 'Put back in the Task Pool';
@@ -1690,6 +1857,7 @@ function openShortcuts() {
     ['Ctrl+Alt+K', 'Quick add from any program (also works with the window closed)'],
     ['N', 'New task in the last used project'],
     ['P', 'New project'],
+    ['/ / Ctrl+F', 'Search the board (Esc clears, Enter jumps to the first match)'],
     ['Ctrl+Z', 'Undo'],
     ['Ctrl+Y / Ctrl+Shift+Z', 'Redo'],
     ['?', 'Show this list'],
@@ -1816,6 +1984,7 @@ function openCardMenu(taskId, x, y) {
   openContextMenu([
     { label: task.waitingFor ? '⏳ No longer waiting' : '⏳ Waiting for…', shortcut: 'W', action: () => toggleWaiting(taskId) },
     { label: '✏️ Edit', shortcut: 'E', action: () => openEditor(taskId) },
+    ...findLinks(task.notes).slice(0, 5).map(link => ({ label: `🔗 ${linkLabel(link.url)}`, action: () => openLink(link.url) })),
     null,
     ...['pool', 'todo', 'doing', 'done']
       .filter(column => column !== task.column)
@@ -1966,6 +2135,12 @@ document.addEventListener('keydown', event => {
   const mod = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
 
+  if (mod && !event.altKey && !event.shiftKey && key === 'f') {
+    event.preventDefault();
+    focusBoardSearch();
+    return;
+  }
+
   if (mod && !event.altKey && !typing) {
     if (key === 'z') {
       event.preventDefault();
@@ -2000,7 +2175,10 @@ document.addEventListener('keydown', event => {
   const card = event.target.closest ? event.target.closest('.task-card') : null;
   if (card && handleCardKey(event, card)) return;
 
-  if (key === 'n') {
+  if (event.key === '/') {
+    event.preventDefault();
+    focusBoardSearch();
+  } else if (key === 'n') {
     event.preventDefault();
     focusNewTaskInput(lastProjectId);
   } else if (key === 'p') {

@@ -2,7 +2,7 @@
 // Minimal stand-in for the parts of Electron that main.js uses, so the main process can be
 // exercised in plain Node. State is exposed on global.__S for the test to inspect.
 const S = global.__S = { handlers:{}, on:{}, appEvents:{}, windows:[], shortcuts:{}, balloons:[], dialogs:[], login:null, registerOk: true, packaged: process.env.PKG!=='0' };
-class WC { constructor(w){ this.w=w; this.sent=[]; this.once={}; } send(c,d){ this.sent.push([c,d]); } isLoading(){ return false; } isDevToolsOpened(){ return false; } }
+class WC { constructor(w){ this.w=w; this.sent=[]; this.once={}; this.ev={}; } send(c,d){ this.sent.push([c,d]); } setWindowOpenHandler(fn){ this.openHandler=fn; } on(e,cb){ this.ev[e]=cb; } isLoading(){ return false; } isDevToolsOpened(){ return false; } }
 class BW { constructor(o){ this.opts=o; this.ev={}; this.visible=!!(o.show!==false); this.webContents=new WC(this); this.maximized=false; S.windows.push(this); }
   on(e,cb){ (this.ev[e] ||= []).push(cb); } emit(e,...a){ (this.ev[e]||[]).forEach(cb=>cb(...a)); }
   loadFile(f){ this.file=f; } show(){ this.visible=true; } hide(){ this.visible=false; } focus(){} isVisible(){ return this.visible; }
@@ -21,6 +21,6 @@ module.exports = {
   ipcMain: { handle: (c, fn) => { S.handlers[c] = fn; }, on: (c, fn) => { S.on[c] = fn; } },
   screen: { getAllDisplays: () => [{ workArea: { x:0, y:0, width:1920, height:1080 } }], getCursorScreenPoint: () => ({x:2500,y:100}),
     getDisplayNearestPoint: () => ({ workArea: { x:1920, y:0, width:2560, height:1440 } }) },
-  shell: { openPath(p){ S.opened = p; } },
+  shell: { openPath(p){ S.opened = p; }, openExternal(u){ (S.external ||= []).push(u); } },
   powerMonitor: { on(e, cb){ (S.power ||= {})[e] = cb; } }
 };

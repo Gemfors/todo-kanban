@@ -1053,3 +1053,112 @@ button:focus-visible {
   font-size: 12px;
   color: #7b8794;
 }
+
+/* ---------- Search on the board ---------- */
+
+.board-actions {
+  align-items: center;
+}
+
+.board-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.board-search-icon {
+  position: absolute;
+  left: 9px;
+  font-size: 15px;
+  color: #9aa5b1;
+  pointer-events: none;
+}
+
+#board-search {
+  width: 190px;
+  padding: 6px 10px 6px 28px;
+  font-size: 13px;
+  font-family: inherit;
+  color: inherit;
+  background: #f5f7fa;
+  border: 1px solid #e4e7eb;
+  border-radius: 7px;
+  outline: none;
+  transition: width 0.15s ease, background 0.15s ease;
+}
+
+#board-search:focus,
+body.searching #board-search {
+  width: 260px;
+  background: white;
+  border-color: #9aa6ff;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.board-search.no-hits #board-search {
+  border-color: #fdba74;
+  box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.12);
+}
+
+.board-search-count {
+  position: absolute;
+  right: 28px;
+  font-size: 11px;
+  color: #7b8794;
+  pointer-events: none;
+}
+
+.task-card.search-miss {
+  opacity: 0.22;
+  filter: grayscale(0.6);
+}
+
+.task-card.search-hit {
+  border-color: #9aa6ff;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.18);
+}
+
+.project-section.collapsed.search-has-hit .card-list {
+  display: block;
+}
+
+/* ---------- Links ---------- */
+
+.task-card .link-button,
+.task-card .link-button:hover {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.link-button {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 20px;
+  background: #eef2ff;
+  border-radius: 999px;
+}
+
+.link-button:hover {
+  background: #e0e7ff;
+}
+
+.note-link {
+  color: #4338ca;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.note-link:hover {
+  color: #3730a3;
+}
+
+.editor-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: -6px 0 12px;
+  font-size: 13px;
+}

@@ -150,6 +150,15 @@ S.ready();
     assert(S.handlers['data:load']().tasks.length === 1, 'corrupt file falls back to .bak');
   }
   if (scenario === 'normal') {
+    S.external = [];
+    assert(S.handlers['link:open'](null, 'https://hiq.se/x') === true && S.external[0] === 'https://hiq.se/x', 'web links open in the browser');
+    assert(S.handlers['link:open'](null, 'file:///C:/Windows/system32/calc.exe') === false && S.handlers['link:open'](null, 'javascript:alert(1)') === false, 'other schemes are refused');
+    assert(S.external.length === 1, 'nothing else was opened');
+    const opened = main.webContents.openHandler({ url: 'https://example.com' });
+    assert(opened.action === 'deny' && S.external[1] === 'https://example.com', 'new windows are denied, link goes to the browser');
+    let prevented = false;
+    main.webContents.ev['will-navigate']({ preventDefault() { prevented = true; } }, 'https://evil.example');
+    assert(prevented, 'the board window never navigates away');
     const file = S.menu.find(m => m.label === 'File').submenu;
     assert(file.find(i => i.label === 'Daily backup to OneDrive').enabled === false, 'no OneDrive found -> backup option disabled');
   }

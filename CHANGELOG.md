@@ -3,7 +3,13 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
-## 1.6.0 – 2026-10-06
+## 1.7.0 – 2026-10-06
+
+### Added
+- Search on the board: the search field at the top right (or press / or Ctrl+F). Cards that don't match fade out on the Today board and in the Task Pool; it searches the task text, notes, the waiting-for name and the project name/label, and all words must match. A collapsed project opens while it has matches. Enter jumps to the first match, Esc clears.
+- Clickable links in notes: cards whose notes contain web links get a 🔗 (with a count if there are several) that opens the first link in your browser; right-click the card for all links. The edit window lists the links under the notes as you type, and archived notes have clickable links too. Only http/https links are opened, and the board window can never navigate away.
+
+
 
 ### Added
 - Done clears itself each morning: tasks finished on an earlier day move to the archive the first time the app starts, wakes up or gets focus on a new day. Today's finished tasks stay. A message with Undo tells you when it happens. Right-click the Done header to clear now, turn it off/on, or open the archive. Clear still works.

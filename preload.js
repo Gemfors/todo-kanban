@@ -5,5 +5,6 @@ contextBridge.exposeInMainWorld('kanbanStorage', {
   save: (data) => ipcRenderer.invoke('data:save', data),
   onImported: (callback) => ipcRenderer.on('data:imported', (_event, data) => callback(data)),
   onCommand: (callback) => ipcRenderer.on('app:command', (_event, command) => callback(command)),
-  onQuickAdd: (callback) => ipcRenderer.on('quickadd:task', (_event, task) => callback(task))
+  onQuickAdd: (callback) => ipcRenderer.on('quickadd:task', (_event, task) => callback(task)),
+  openExternal: (url) => ipcRenderer.invoke('link:open', url)
 });
