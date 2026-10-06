@@ -17,6 +17,8 @@ const PREVIOUS_STEP = { todo: 'pool', doing: 'todo', done: 'doing' };
 const MAX_UNDO = 50;
 const CLICK_DELAY_MS = 220;
 const FALLBACK_STORAGE_KEY = 'kanban-data-v2';
+const WAITING_STALE_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const storage = window.kanbanStorage || null;
 
@@ -97,6 +99,52 @@ function formatDate(iso) {
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function daysSince(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 0;
+  return Math.max(0, Math.round((startOfDay(new Date()) - startOfDay(date)) / DAY_MS));
+}
+
+function normalizeWaiting(value) {
+  if (!value || typeof value !== 'object') return null;
+  const since = value.since && !Number.isNaN(new Date(value.since).getTime()) ? String(value.since) : nowIso();
+  return { who: String(value.who || '').replace(/\s+/g, ' ').trim().slice(0, 80), since };
+}
+
+function waitingDaysLabel(days) {
+  if (days === 0) return 'today';
+  return `${days}d`;
+}
+
+function waitingTitle(waiting) {
+  const days = daysSince(waiting.since);
+  const who = waiting.who ? `Waiting for ${waiting.who}` : 'Waiting';
+  return `${who} since ${formatDate(waiting.since)} (${days === 1 ? '1 day' : `${days} days`}). Press W to clear.`;
+}
+
+// Guesses who you're waiting on from the task text, e.g. "Följ upp med Niklas …" → "Niklas",
+// "Fredriks ask kring VCC" → "Fredrik". Only used to prefill the name.
+function suggestWaitingName(text) {
+  const value = String(text || '');
+  const name = '(\\p{Lu}[\\p{L}\\-]+)';
+  // Keywords match with or without a capital first letter ("med"/"Med").
+  const words = list => `(?:${list.split('|').map(w => `[${w[0]}${w[0].toUpperCase()}]${w.slice(1)}`).join('|')})`;
+  const patterns = [
+    new RegExp(`(?:^|\\s)${words('med|från|with|from|för|av')}\\s+${name}`, 'u'),
+    new RegExp(`${name}s\\s+${words('ask|fråga|input|svar|feedback|godkännande|ok')}(?!\\p{L})`, 'u'),
+    new RegExp(`(?:^|\\s)${words('fråga|ask|ping|påminn|remind|mejla|maila|ring|call')}\\s+${name}`, 'u')
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(value);
+    if (match) return match[1];
+  }
+  return '';
+}
+
 function make(tag, className, text) {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -168,6 +216,7 @@ function normalizeData(raw) {
       notes: typeof task.notes === 'string' ? task.notes : '',
       projectId: resolveProjectId(task),
       column: ALL_COLUMNS.includes(task.column) ? task.column : 'pool',
+      waitingFor: task.column === 'done' ? null : normalizeWaiting(task.waitingFor),
       createdAt: task.createdAt || nowIso(),
       updatedAt: task.updatedAt || task.createdAt || nowIso()
     });
@@ -321,6 +370,7 @@ function moveTask(taskId, column, { projectId = null, beforeTaskId = null } = {}
   const [task] = state.tasks.splice(index, 1);
   task.column = column;
   if (projectId) task.projectId = projectId;
+  if (column === 'done') task.waitingFor = null; // finished = no longer waiting
   task.updatedAt = nowIso();
 
   const beforeIndex = beforeTaskId ? state.tasks.findIndex(t => t.id === beforeTaskId) : -1;
@@ -347,9 +397,33 @@ function addTask(projectId, text, column = 'pool') {
     notes: '',
     projectId,
     column: ALL_COLUMNS.includes(column) ? column : 'pool',
+    waitingFor: null,
     createdAt: nowIso(),
     updatedAt: nowIso()
   });
+}
+
+function setWaiting(taskId, who) {
+  const task = getTask(taskId);
+  if (!task) return;
+  const cleanWho = String(who || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+
+  commit(() => {
+    const current = getTask(taskId);
+    current.waitingFor = { who: cleanWho, since: current.waitingFor ? current.waitingFor.since : nowIso() };
+    current.updatedAt = nowIso();
+  }, { toast: cleanWho ? `⏳ Waiting for ${cleanWho}` : '⏳ Marked as waiting' });
+}
+
+function clearWaiting(taskId) {
+  const task = getTask(taskId);
+  if (!task || !task.waitingFor) return;
+
+  commit(() => {
+    const current = getTask(taskId);
+    current.waitingFor = null;
+    current.updatedAt = nowIso();
+  }, { toast: `No longer waiting: “${task.text}”` });
 }
 
 function deleteTask(taskId) {
@@ -555,13 +629,23 @@ function createCard(task) {
 
   const text = make('span', 'task-text', task.text);
 
-  card.append(dot, text);
+  // Text gets the full width; badges go on a line below it and the buttons float on hover.
+  const body = make('div', 'task-body');
+  body.appendChild(text);
 
+  const meta = make('div', 'task-meta');
+  if (task.waitingFor) {
+    card.classList.add('is-waiting');
+    meta.appendChild(createWaitingBadge(task));
+  }
   if (task.notes && task.notes.trim()) {
     const notesIndicator = make('span', 'notes-indicator', '📝');
     notesIndicator.title = task.notes.length > 300 ? `${task.notes.slice(0, 300)}…` : task.notes;
-    card.appendChild(notesIndicator);
+    meta.appendChild(notesIndicator);
   }
+  if (meta.childElementCount) body.appendChild(meta);
+
+  card.append(dot, body);
 
   const editButton = make('button', 'rename-task-button', '✏️');
   editButton.type = 'button';
@@ -570,6 +654,15 @@ function createCard(task) {
   editButton.addEventListener('click', event => {
     event.stopPropagation();
     openEditor(task.id);
+  });
+
+  const waitingButton = make('button', 'waiting-button', '⏳');
+  waitingButton.type = 'button';
+  waitingButton.title = task.waitingFor ? 'No longer waiting (W)' : 'Waiting for someone (W)';
+  waitingButton.tabIndex = -1;
+  waitingButton.addEventListener('click', event => {
+    event.stopPropagation();
+    toggleWaiting(task.id);
   });
 
   const deleteButton = make('button', 'delete-button', 'X');
@@ -581,7 +674,9 @@ function createCard(task) {
     deleteTask(task.id);
   });
 
-  card.append(editButton, deleteButton);
+  const actions = make('div', 'task-actions');
+  actions.append(waitingButton, editButton, deleteButton);
+  card.appendChild(actions);
 
   // A single click moves the card, a double click opens the editor. The short delay
   // lets us tell the two apart so a double click does not also move the card.
@@ -622,6 +717,28 @@ function createCard(task) {
   });
 
   return card;
+}
+
+function createWaitingBadge(task) {
+  const badge = make('span', 'waiting-badge');
+  badge.dataset.taskId = task.id;
+  updateWaitingBadge(badge, task.waitingFor);
+  return badge;
+}
+
+function updateWaitingBadge(badge, waiting) {
+  const days = daysSince(waiting.since);
+  badge.textContent = `⏳ ${waiting.who ? `${waiting.who} · ` : ''}${waitingDaysLabel(days)}`;
+  badge.title = waitingTitle(waiting);
+  badge.classList.toggle('stale', days >= WAITING_STALE_DAYS);
+}
+
+// Day counters move on while the app stays open (e.g. in the tray overnight).
+function refreshWaitingBadges() {
+  document.querySelectorAll('.waiting-badge').forEach(badge => {
+    const task = getTask(badge.dataset.taskId);
+    if (task && task.waitingFor) updateWaitingBadge(badge, task.waitingFor);
+  });
 }
 
 function renderProjects() {
@@ -1005,6 +1122,55 @@ function confirmDialog({ title, message, confirmLabel = 'OK', danger = false }) 
   });
 }
 
+function toggleWaiting(taskId) {
+  const task = getTask(taskId);
+  if (!task) return;
+  if (task.waitingFor) {
+    clearWaiting(taskId);
+  } else {
+    openWaitingPrompt(taskId);
+  }
+}
+
+function openWaitingPrompt(taskId) {
+  const task = getTask(taskId);
+  if (!task) return;
+
+  const modal = openModal({ kind: 'waiting', title: 'Waiting for…', className: 'modal-small' });
+  modal.body.appendChild(make('p', 'modal-text modal-task-text', task.text));
+
+  const label = make('label', 'field');
+  label.appendChild(make('span', 'field-label', 'Who are you waiting on? (optional)'));
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = suggestWaitingName(task.text);
+  input.placeholder = 'Name';
+  label.appendChild(input);
+  modal.body.appendChild(label);
+
+  const save = () => {
+    const who = input.value;
+    closeModal();
+    setWaiting(taskId, who);
+  };
+
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      save();
+    }
+  });
+
+  modal.footer.append(
+    make('span', 'modal-footer-spacer'),
+    modalButton('Cancel', '', () => modal.cancel()),
+    modalButton('Mark as waiting', 'button-primary', save)
+  );
+
+  input.focus();
+  input.select();
+}
+
 function openEditor(taskId) {
   const task = getTask(taskId);
   if (!task) return;
@@ -1037,26 +1203,61 @@ function openEditor(taskId) {
   notesInput.placeholder = 'Details, links, next steps…';
   notesLabel.appendChild(notesInput);
 
+  const waitingField = make('div', 'field waiting-field');
+  const waitingToggleLabel = make('label', 'checkbox-label');
+  const waitingCheckbox = document.createElement('input');
+  waitingCheckbox.type = 'checkbox';
+  waitingCheckbox.checked = Boolean(task.waitingFor);
+  waitingToggleLabel.append(waitingCheckbox, make('span', '', '⏳ Waiting for someone'));
+  const waitingInput = document.createElement('input');
+  waitingInput.type = 'text';
+  waitingInput.placeholder = 'Name (optional)';
+  waitingInput.value = task.waitingFor ? task.waitingFor.who : suggestWaitingName(task.text);
+  waitingInput.disabled = !waitingCheckbox.checked;
+  const waitingSince = make('span', 'field-hint',
+    task.waitingFor ? `since ${formatDate(task.waitingFor.since)} (${daysSince(task.waitingFor.since)} d)` : '');
+  waitingCheckbox.addEventListener('change', () => {
+    waitingInput.disabled = !waitingCheckbox.checked;
+    if (waitingCheckbox.checked) {
+      waitingInput.focus();
+      waitingInput.select();
+    }
+  });
+  const waitingRow = make('div', 'waiting-row');
+  waitingRow.append(waitingToggleLabel, waitingInput, waitingSince);
+  waitingField.appendChild(waitingRow);
+
   const meta = make('p', 'modal-meta',
     `In ${COLUMN_LABELS[task.column]} · created ${formatDate(task.createdAt)}` +
     (task.updatedAt && task.updatedAt !== task.createdAt ? ` · updated ${formatDate(task.updatedAt)}` : ''));
 
-  modal.body.append(titleLabel, projectLabel, notesLabel, meta);
+  modal.body.append(titleLabel, projectLabel, waitingField, notesLabel, meta);
 
   function saveEdits() {
     const text = titleInput.value.trim() || task.text;
     const notes = notesInput.value.replace(/\s+$/, '');
     const projectId = projectSelect.value;
+    const waitingWho = waitingInput.value.replace(/\s+/g, ' ').trim().slice(0, 80);
+    const wantsWaiting = waitingCheckbox.checked;
 
     closeModal();
 
     commit(() => {
       const current = getTask(taskId);
       if (!current) return false;
-      if (current.text === text && (current.notes || '') === notes && current.projectId === projectId) return false;
+
+      const waitingFor = wantsWaiting
+        ? { who: waitingWho, since: current.waitingFor ? current.waitingFor.since : nowIso() }
+        : null;
+      const waitingChanged = JSON.stringify(waitingFor) !== JSON.stringify(current.waitingFor || null);
+
+      if (current.text === text && (current.notes || '') === notes && current.projectId === projectId && !waitingChanged) {
+        return false;
+      }
       current.text = text;
       current.notes = notes;
       current.projectId = projectId;
+      current.waitingFor = waitingFor;
       current.updatedAt = nowIso();
       return true;
     });
@@ -1072,12 +1273,12 @@ function openEditor(taskId) {
 
   modal.footer.append(deleteButton, make('span', 'modal-footer-spacer'), cancelButton, saveButton);
 
-  titleInput.addEventListener('keydown', event => {
+  [titleInput, waitingInput].forEach(input => input.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
       event.preventDefault();
       saveEdits();
     }
-  });
+  }));
 
   modal.modal.addEventListener('keydown', event => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
@@ -1153,6 +1354,7 @@ function openShortcuts() {
     ['←', 'Move back one step'],
     ['↑ / ↓', 'Select the card above / below'],
     ['E', 'Edit task and notes'],
+    ['W', 'Mark as waiting for someone / no longer waiting'],
     ['Delete', 'Delete task'],
     ['', 'In the edit dialog:'],
     ['Ctrl+Enter', 'Save']
@@ -1237,6 +1439,11 @@ function handleCardKey(event, card) {
     case 'F2':
       event.preventDefault();
       openEditor(taskId);
+      return true;
+    case 'w':
+    case 'W':
+      event.preventDefault();
+      toggleWaiting(taskId);
       return true;
     case 'Delete':
     case 'Backspace': {
@@ -1353,6 +1560,9 @@ if (storage) {
     else if (command === 'archive') openArchive();
   });
 }
+
+setInterval(refreshWaitingBadges, 15 * 60 * 1000);
+window.addEventListener('focus', refreshWaitingBadges);
 
 async function init() {
   let data = null;

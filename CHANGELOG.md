@@ -3,6 +3,18 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.4.0 – 2026-10-06
+
+### Added
+- "Waiting for" marks: press W on a card (or hover and click ⏳) to mark that you're waiting on someone. The card gets a dashed outline and a badge like `⏳ Niklas · 3d`; after 7 days the badge turns orange.
+  - The name is suggested from the task text ("Följ upp med Niklas…" → Niklas, "Fredriks ask…" → Fredrik) and is optional.
+  - W again clears it; the edit dialog also has a "Waiting for someone" checkbox and name.
+  - Moving a task to Done ends the wait. The day count updates while the app stays open.
+- Automated tests in `tests/` (`npm test`): board, waiting, quick add and main process.
+
+### Changed
+- Card layout: the text always gets the full width. Badges (⏳, 📝) sit on a line below it, and the buttons float over the top-right corner on hover.
+
 ## 1.3.3 – 2026-10-06
 
 ### Fixed

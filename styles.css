@@ -420,6 +420,7 @@ button:focus-visible {
 /* ---------- Cards ---------- */
 
 .task-card {
+  position: relative;
   background: white;
   padding: 10px 12px;
   margin-bottom: 8px;
@@ -427,8 +428,7 @@ button:focus-visible {
   border: 1px solid #e3e6ea;
   cursor: pointer;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   width: 100%;
   max-width: 100%;
@@ -453,11 +453,48 @@ button:focus-visible {
   transform: scale(0.99);
 }
 
-.task-text {
+.task-body {
   flex: 1;
-  margin-right: 10px;
   min-width: 0;
-  word-break: break-word;
+}
+
+.task-text {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* Buttons float over the top-right corner on hover instead of taking width from the text. */
+.task-actions {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.task-card:hover .task-actions,
+.task-card:focus .task-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.task-card.dragging .task-actions {
+  display: none;
 }
 
 .notes-indicator {
@@ -469,9 +506,10 @@ button:focus-visible {
 
 .delete-button {
   border: none;
-  background: #ddd;
-  border-radius: 4px;
-  padding: 4px 8px;
+  background: #e4e7eb;
+  border-radius: 6px;
+  height: 26px;
+  padding: 0 9px;
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -482,10 +520,11 @@ button:focus-visible {
   border-radius: 999px;
   background: #4f46e5;
   flex-shrink: 0;
-  margin-top: 2px;
+  margin-top: 6px;
 }
 
-.rename-task-button {
+.rename-task-button,
+.waiting-button {
   width: 26px;
   height: 26px;
   padding: 0;
@@ -500,8 +539,82 @@ button:focus-visible {
   font-size: 14px;
 }
 
-.rename-task-button:hover {
+.rename-task-button:hover,
+.waiting-button:hover {
   background: #e2e6ee;
+}
+
+/* ---------- Waiting for ---------- */
+
+.task-card.is-waiting {
+  border-style: dashed;
+  border-color: #cbd2d9;
+  background: #fcfcfd;
+}
+
+.task-card.is-waiting .task-text {
+  color: #52606d;
+}
+
+.waiting-badge {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #52606d;
+  background: #eef1f6;
+  border-radius: 999px;
+  cursor: help;
+}
+
+.waiting-badge.stale {
+  color: #c2410c;
+  background: #ffedd5;
+  font-weight: 600;
+}
+
+.task-card.is-waiting:has(.waiting-badge.stale) {
+  border-color: #fdba74;
+}
+
+.waiting-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.waiting-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.waiting-row input[type="text"]:disabled {
+  background: #f5f7fa;
+  color: #9aa5b1;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: #7b8794;
+  white-space: nowrap;
+}
+
+.modal-task-text {
+  margin-bottom: 12px;
+  font-weight: 600;
 }
 
 .task-card.dragging {
@@ -735,4 +848,9 @@ button:focus-visible {
   width: 45%;
   white-space: nowrap;
   padding-right: 12px;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
 }
