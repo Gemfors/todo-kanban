@@ -3,6 +3,7 @@ const path = require('path');
 const {
   app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, screen, shell
 } = require('electron');
+const { powerMonitor } = require('electron');
 
 const userDataDir = app.getPath('userData');
 const stateFile = path.join(userDataDir, 'window-state.json');
@@ -11,6 +12,9 @@ const dataFile = path.join(userDataDir, 'kanban-data.json');
 const dataBackupFile = path.join(userDataDir, 'kanban-data.bak.json');
 const dailyBackupDir = path.join(userDataDir, 'backups');
 const DAILY_BACKUPS_TO_KEEP = 14;
+const ONEDRIVE_BACKUPS_TO_KEEP = 30;
+const ONEDRIVE_FOLDER_NAME = 'Todo Kanban backups';
+const ONEDRIVE_REFRESH_MS = 60 * 60 * 1000; // refresh today's OneDrive copy at most once an hour
 
 // Deliberately different from the installer's id (com.olle.todo-kanban): with the old id the
 // taskbar matched the window to the Start-menu shortcut and kept showing the icon it had
@@ -68,6 +72,7 @@ function loadSettings() {
     startWithWindows: true,
     trayHintShown: false,
     lastQuickAddProjectId: null,
+    oneDriveBackup: true,
     ...saved
   };
 }
@@ -177,23 +182,75 @@ function writeFileAtomic(file, content) {
   }
 }
 
-function writeDailyBackup(content) {
-  fs.mkdirSync(dailyBackupDir, { recursive: true });
+function localDayKey(date = new Date()) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 
-  const today = new Date().toISOString().slice(0, 10);
-  const todayFile = path.join(dailyBackupDir, `kanban-${today}.json`);
+// One file per day in `dir`; keeps the newest `keep` files.
+function writeDayFile(dir, content, keep, { overwrite = false } = {}) {
+  fs.mkdirSync(dir, { recursive: true });
+  const todayFile = path.join(dir, `kanban-${localDayKey()}.json`);
 
-  if (!fs.existsSync(todayFile)) {
+  if (overwrite || !fs.existsSync(todayFile)) {
     fs.writeFileSync(todayFile, content, 'utf8');
   }
 
-  const backups = fs.readdirSync(dailyBackupDir)
+  const backups = fs.readdirSync(dir)
     .filter(name => /^kanban-\d{4}-\d{2}-\d{2}\.json$/.test(name))
     .sort();
 
-  backups.slice(0, Math.max(0, backups.length - DAILY_BACKUPS_TO_KEEP)).forEach(name => {
-    fs.rmSync(path.join(dailyBackupDir, name), { force: true });
+  backups.slice(0, Math.max(0, backups.length - keep)).forEach(name => {
+    fs.rmSync(path.join(dir, name), { force: true });
   });
+}
+
+function writeDailyBackup(content) {
+  writeDayFile(dailyBackupDir, content, DAILY_BACKUPS_TO_KEEP);
+}
+
+/* ---------- OneDrive copy ---------- */
+
+// Your OneDrive (work account first). If Documents is synced to OneDrive the backups go in
+// Documents, otherwise in the OneDrive root.
+function oneDriveBackupDir() {
+  const root = process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer;
+  if (!root || !fs.existsSync(root)) return null;
+
+  let documents = null;
+  try {
+    documents = app.getPath('documents');
+  } catch {
+    documents = null;
+  }
+  const inside = documents && path.resolve(documents).toLowerCase().startsWith(path.resolve(root).toLowerCase());
+  return path.join(inside ? documents : root, ONEDRIVE_FOLDER_NAME);
+}
+
+let lastOneDriveWrite = 0;
+
+function writeOneDriveBackup(content, { force = false } = {}) {
+  if (settings.oneDriveBackup === false) return;
+  const dir = oneDriveBackupDir();
+  if (!dir) return;
+
+  const now = Date.now();
+  const dayChanged = !fs.existsSync(path.join(dir, `kanban-${localDayKey()}.json`));
+  if (!force && !dayChanged && now - lastOneDriveWrite < ONEDRIVE_REFRESH_MS) return;
+
+  try {
+    writeDayFile(dir, content, ONEDRIVE_BACKUPS_TO_KEEP, { overwrite: true });
+    lastOneDriveWrite = now;
+  } catch (err) {
+    console.error('Could not write OneDrive backup', err); // e.g. OneDrive paused: try again next save
+  }
+}
+
+function setOneDriveBackup(enabled) {
+  settings.oneDriveBackup = enabled;
+  saveSettings();
+  if (enabled && lastData) writeOneDriveBackup(JSON.stringify(lastData, null, 2), { force: true });
+  buildMenu();
 }
 
 function saveData(data) {
@@ -216,6 +273,8 @@ function saveData(data) {
   } catch (err) {
     console.error('Could not write daily backup', err);
   }
+
+  writeOneDriveBackup(content);
 }
 
 ipcMain.handle('data:load', () => loadData());
@@ -534,6 +593,22 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Open data folder', click: () => shell.openPath(userDataDir) },
         {
+          label: 'Daily backup to OneDrive',
+          type: 'checkbox',
+          checked: settings.oneDriveBackup !== false,
+          enabled: Boolean(oneDriveBackupDir()),
+          click: item => setOneDriveBackup(item.checked)
+        },
+        {
+          label: 'Open OneDrive backups folder',
+          enabled: Boolean(oneDriveBackupDir()),
+          click: () => {
+            const dir = oneDriveBackupDir();
+            fs.mkdirSync(dir, { recursive: true });
+            shell.openPath(dir);
+          }
+        },
+        {
           label: 'Start with Windows',
           type: 'checkbox',
           checked: Boolean(settings.startWithWindows),
@@ -586,7 +661,8 @@ function buildMenu() {
             detail: [
               `Quick add: ${registeredShortcut ? shortcutLabel() : 'not available'}`,
               `Electron ${process.versions.electron}`,
-              `Data folder: ${userDataDir}`
+              `Data folder: ${userDataDir}`,
+              `OneDrive backups: ${oneDriveBackupDir() && settings.oneDriveBackup !== false ? oneDriveBackupDir() : 'off'}`
             ].join('\n')
           })
         }
@@ -692,6 +768,18 @@ app.whenReady().then(() => {
   registerQuickAddShortcut();
   buildMenu();
   buildTrayMenu();
+
+  // Waking the PC (or unlocking it) may be the start of a new day: let the board check.
+  const dayCheck = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:command', 'day-check');
+  };
+  powerMonitor.on('resume', dayCheck);
+  powerMonitor.on('unlock-screen', dayCheck);
+});
+
+// Make sure the OneDrive copy has the latest state when the app quits.
+app.on('before-quit', () => {
+  if (lastData) writeOneDriveBackup(JSON.stringify(lastData, null, 2), { force: true });
 });
 
 app.on('window-all-closed', () => {

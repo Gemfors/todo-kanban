@@ -12,7 +12,7 @@ class BW { constructor(o){ this.opts=o; this.ev={}; this.visible=!!(o.show!==fal
 class Tray { constructor(icon){ this.icon=icon; S.tray=this; this.ev={}; } on(e,cb){ this.ev[e]=cb; } setToolTip(t){ this.tip=t; } setContextMenu(m){ this.menu=m; } displayBalloon(b){ S.balloons.push(b); } }
 module.exports = {
   app: { getPath: k => process.env.MOCK_UD + (k==='userData' ? '' : '/docs'), getVersion: () => 'test', get isPackaged(){ return S.packaged; },
-    requestSingleInstanceLock: () => true, quit(){ S.quit=true; }, on(e,cb){ S.appEvents[e]=cb; }, whenReady(){ return { then(cb){ S.ready=cb; } }; },
+    requestSingleInstanceLock: () => true, quit(){ S.quit=true; }, on(e,cb){ const prev=S.appEvents[e]; S.appEvents[e] = prev ? (...a)=>{ prev(...a); cb(...a); } : cb; }, whenReady(){ return { then(cb){ S.ready=cb; } }; },
     setLoginItemSettings(o){ S.login=o; }, setAppUserModelId(id){ S.aumid=id; } },
   BrowserWindow: BW, Tray,
   Menu: { buildFromTemplate: t => t, setApplicationMenu: m => { S.menu = m; } },
@@ -21,5 +21,6 @@ module.exports = {
   ipcMain: { handle: (c, fn) => { S.handlers[c] = fn; }, on: (c, fn) => { S.on[c] = fn; } },
   screen: { getAllDisplays: () => [{ workArea: { x:0, y:0, width:1920, height:1080 } }], getCursorScreenPoint: () => ({x:2500,y:100}),
     getDisplayNearestPoint: () => ({ workArea: { x:1920, y:0, width:2560, height:1440 } }) },
-  shell: { openPath(){} }
+  shell: { openPath(p){ S.opened = p; } },
+  powerMonitor: { on(e, cb){ (S.power ||= {})[e] = cb; } }
 };

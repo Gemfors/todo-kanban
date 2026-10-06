@@ -14,7 +14,8 @@ const SCENARIOS = [
   { name: 'fail', env: {} },
   { name: 'dev', env: { PKG: '0' } },
   { name: 'win32', env: {} },
-  { name: 'data', env: {} }
+  { name: 'data', env: {} },
+  { name: 'onedrive', env: { ONEDRIVE_FROM_UD: '1' } }
 ];
 
 if (!process.env.MAIN_TEST_SCENARIO) {
@@ -23,7 +24,10 @@ if (!process.env.MAIN_TEST_SCENARIO) {
   for (const scenario of SCENARIOS) {
     const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'kanban-main-'));
     const result = spawnSync(process.execPath, [__filename, ...(scenario.args || [])], {
-      env: { ...process.env, ...scenario.env, MAIN_TEST_SCENARIO: scenario.name, MOCK_UD: ud },
+      env: {
+        ...process.env, ...scenario.env, MAIN_TEST_SCENARIO: scenario.name, MOCK_UD: ud,
+        OneDriveCommercial: scenario.env.ONEDRIVE_FROM_UD ? ud : '', OneDrive: '', OneDriveConsumer: ''
+      },
       encoding: 'utf8'
     });
     const output = (result.stdout || '') + (result.stderr || '');
@@ -144,6 +148,41 @@ S.ready();
     assert(rejected, 'invalid data refused');
     fs.writeFileSync(path.join(ud, 'kanban-data.json'), '{broken');
     assert(S.handlers['data:load']().tasks.length === 1, 'corrupt file falls back to .bak');
+  }
+  if (scenario === 'normal') {
+    const file = S.menu.find(m => m.label === 'File').submenu;
+    assert(file.find(i => i.label === 'Daily backup to OneDrive').enabled === false, 'no OneDrive found -> backup option disabled');
+  }
+  if (scenario === 'onedrive') {
+    const dir = path.join(ud, 'docs', 'Todo Kanban backups');
+    fs.mkdirSync(dir, { recursive: true });
+    for (let i = 1; i <= 35; i++) fs.writeFileSync(path.join(dir, `kanban-2025-01-${String(i % 28 + 1).padStart(2, '0')}-${i}.json`), 'ignore-me');
+    for (let i = 1; i <= 35; i++) fs.writeFileSync(path.join(dir, `kanban-2025-${String((i % 12) + 1).padStart(2, '0')}-${String((i % 27) + 1).padStart(2, '0')}.json`), '{}');
+    const pad = n => String(n).padStart(2, '0');
+    const now = new Date();
+    const todayFile = path.join(dir, `kanban-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`);
+    const d = { version: 2, projects: [{ id: 'a', name: 'W' }], tasks: [{ id: 't', text: 'first', projectId: 'a', column: 'pool' }], archive: [] };
+    S.handlers['data:save'](null, d);
+    assert(fs.existsSync(todayFile), 'daily copy written to OneDrive (Documents/Todo Kanban backups)');
+    assert(JSON.parse(fs.readFileSync(todayFile)).tasks[0].text === 'first', 'copy has the data');
+    const dated = fs.readdirSync(dir).filter(n => /^kanban-\d{4}-\d{2}-\d{2}\.json$/.test(n));
+    assert(dated.length === 30, 'keeps the last 30 days: ' + dated.length);
+    assert(fs.readdirSync(dir).some(n => n.endsWith('-1.json')), 'leaves other files alone');
+    d.tasks[0].text = 'second';
+    S.handlers['data:save'](null, d);
+    assert(JSON.parse(fs.readFileSync(todayFile)).tasks[0].text === 'first', 'not rewritten on every save (at most hourly)');
+    S.appEvents['before-quit']();
+    assert(JSON.parse(fs.readFileSync(todayFile)).tasks[0].text === 'second', 'latest state written when quitting');
+    const file = S.menu.find(m => m.label === 'File').submenu;
+    const toggle = file.find(i => i.label === 'Daily backup to OneDrive');
+    assert(toggle.enabled && toggle.checked, 'OneDrive option on by default');
+    toggle.click({ checked: false });
+    fs.rmSync(todayFile);
+    S.handlers['data:save'](null, d);
+    assert(!fs.existsSync(todayFile), 'turning it off stops the copies');
+    assert(JSON.parse(fs.readFileSync(path.join(ud, 'settings.json'))).oneDriveBackup === false, 'setting remembered');
+    S.power.resume();
+    assert(main.webContents.sent.some(m => m[0] === 'app:command' && m[1] === 'day-check'), 'waking the PC asks the board to check for a new day');
   }
   done();
 })();

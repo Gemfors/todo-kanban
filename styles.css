@@ -938,3 +938,118 @@ button:focus-visible {
   font-size: 13px;
   padding: 4px 9px;
 }
+
+/* ---------- Archive: search, filters, days ---------- */
+
+.modal-archive {
+  width: 720px;
+  height: min(720px, calc(100vh - 48px));
+}
+
+.modal-archive .modal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  padding-top: 10px;
+}
+
+.archive-controls {
+  flex-shrink: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eef1f6;
+}
+
+.archive-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+  border: 1px solid #d6dbe3;
+  border-radius: 7px;
+  outline: none;
+}
+
+.archive-search:focus {
+  border-color: #9aa6ff;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.archive-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.archive-filter {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  min-height: 26px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+}
+
+.archive-filter:first-child {
+  padding: 3px 9px;
+  background: #eef1f6;
+}
+
+.archive-filter.selected {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 1px #4f46e5;
+}
+
+.archive-filter .project-tag {
+  margin-top: 0;
+}
+
+.archive-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.archive-day {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #52606d;
+  background: white;
+}
+
+.archive-day-count {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #9aa5b1;
+}
+
+.archive-item .project-tag {
+  margin-top: 2px;
+  min-width: 40px;
+}
+
+.archive-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: #7b8794;
+}
+
+.archive-total {
+  font-size: 12px;
+  color: #7b8794;
+}

@@ -3,7 +3,18 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
-## 1.5.0 – 2026-10-06
+## 1.6.0 – 2026-10-06
+
+### Added
+- Done clears itself each morning: tasks finished on an earlier day move to the archive the first time the app starts, wakes up or gets focus on a new day. Today's finished tasks stay. A message with Undo tells you when it happens. Right-click the Done header to clear now, turn it off/on, or open the archive. Clear still works.
+- Tasks remember when they were finished (`doneAt`); older ones use their last change as the date.
+- New archive view: a search box (text, notes, project name or label), filter chips per project (including deleted projects), and the list grouped by the day each task was finished (Today, Yesterday, weekday + date), newest first, with counts.
+- Daily copy of your board in OneDrive: `Dokument\Todo Kanban backups\kanban-YYYY-MM-DD.json`, refreshed at most hourly and when you quit, last 30 days kept. File → "Daily backup to OneDrive" turns it off; File → "Open OneDrive backups folder"; Help → About shows the folder.
+
+### Changed
+- The local daily backups are named by your local date instead of UTC.
+
+
 
 ### Added
 - Project tags on Today-board cards: a small tag in the project colour with a short label (LAM, SE, UPP, HCS, AHK, ÖVR…) replaces the colour dot, so you can tell projects apart without relying on colour alone. Hover the tag for the full name. Task Pool cards keep the dot, since they already sit under their project.

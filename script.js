@@ -56,8 +56,12 @@ document.querySelectorAll('.column[data-column]').forEach(column => {
 
 /* ================= Helpers ================= */
 
+function defaultSettings() {
+  return { autoClearDone: true };
+}
+
 function emptyState() {
-  return { version: 2, projects: [], tasks: [], archive: [] };
+  return { version: 2, projects: [], tasks: [], archive: [], settings: defaultSettings() };
 }
 
 function uid() {
@@ -175,6 +179,14 @@ function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
+// Local calendar day, e.g. "2026-10-06" (not UTC, so midnight is your midnight).
+function dayKey(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function daysSince(iso) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return 0;
@@ -290,6 +302,8 @@ function normalizeData(raw) {
       projectId: resolveProjectId(task),
       column: ALL_COLUMNS.includes(task.column) ? task.column : 'pool',
       waitingFor: task.column === 'done' ? null : normalizeWaiting(task.waitingFor),
+      // When it was finished. Older data has no doneAt: use the last change as the best guess.
+      doneAt: task.column === 'done' ? validIso(task.doneAt) || validIso(task.updatedAt) || nowIso() : null,
       createdAt: task.createdAt || nowIso(),
       updatedAt: task.updatedAt || task.createdAt || nowIso()
     });
@@ -307,13 +321,21 @@ function normalizeData(raw) {
       projectId: task.projectId ? String(task.projectId) : '',
       projectName: typeof task.projectName === 'string' ? task.projectName : '',
       createdAt: task.createdAt || nowIso(),
+      doneAt: validIso(task.doneAt) || validIso(task.archivedAt) || nowIso(),
       archivedAt: task.archivedAt || nowIso()
     });
   });
 
   if (data.projects.length === 0) addProject('Work');
 
+  const settings = raw.settings && typeof raw.settings === 'object' ? raw.settings : {};
+  data.settings = { ...defaultSettings(), ...(typeof settings.autoClearDone === 'boolean' ? { autoClearDone: settings.autoClearDone } : {}) };
+
   return data;
+}
+
+function validIso(value) {
+  return value && !Number.isNaN(new Date(value).getTime()) ? String(value) : null;
 }
 
 function readLegacyLocalStorage() {
@@ -441,6 +463,8 @@ function moveTask(taskId, column, { projectId = null, beforeTaskId = null } = {}
   if (index < 0) return false;
 
   const [task] = state.tasks.splice(index, 1);
+  if (column === 'done' && task.column !== 'done') task.doneAt = nowIso();
+  if (column !== 'done') task.doneAt = null;
   task.column = column;
   if (projectId) task.projectId = projectId;
   if (column === 'done') task.waitingFor = null; // finished = no longer waiting
@@ -507,24 +531,68 @@ function deleteTask(taskId) {
   }, { toast: `Deleted “${task.text}”` });
 }
 
+function archiveTasks(tasks) {
+  const archivedAt = nowIso();
+  const ids = new Set(tasks.map(task => task.id));
+  const archived = tasks.map(task => ({
+    id: task.id,
+    text: task.text,
+    notes: task.notes,
+    projectId: task.projectId,
+    projectName: getProject(task.projectId) ? getProject(task.projectId).name : '',
+    createdAt: task.createdAt,
+    doneAt: task.doneAt || archivedAt,
+    archivedAt
+  }));
+  state.archive = [...archived, ...state.archive];
+  state.tasks = state.tasks.filter(task => !ids.has(task.id));
+}
+
 function clearDone() {
   const doneTasks = state.tasks.filter(task => task.column === 'done');
   if (doneTasks.length === 0) return;
 
+  commit(() => archiveTasks(doneTasks),
+    { toast: `Archived ${doneTasks.length} ${doneTasks.length === 1 ? 'task' : 'tasks'}` });
+}
+
+// Each new day, tasks finished on an earlier day move to the archive by themselves.
+// Today's finished tasks stay in Done so you can see what you got done today.
+let lastAutoClearDay = null;
+
+function autoClearDone() {
+  const today = dayKey(new Date());
+  if (lastAutoClearDay === today) return;
+  lastAutoClearDay = today;
+  if (!state.settings || !state.settings.autoClearDone) return;
+
+  const old = state.tasks.filter(task => task.column === 'done' && dayKey(task.doneAt || task.updatedAt) < today);
+  if (old.length === 0) return;
+
+  commit(() => archiveTasks(old), {
+    toast: `New day: archived ${old.length} ${old.length === 1 ? 'task' : 'tasks'} finished earlier`
+  });
+}
+
+function setAutoClear(enabled) {
   commit(() => {
-    const archivedAt = nowIso();
-    const archived = doneTasks.map(task => ({
-      id: task.id,
-      text: task.text,
-      notes: task.notes,
-      projectId: task.projectId,
-      projectName: getProject(task.projectId) ? getProject(task.projectId).name : '',
-      createdAt: task.createdAt,
-      archivedAt
-    }));
-    state.archive = [...archived, ...state.archive];
-    state.tasks = state.tasks.filter(task => task.column !== 'done');
-  }, { toast: `Archived ${doneTasks.length} ${doneTasks.length === 1 ? 'task' : 'tasks'}` });
+    state.settings = { ...defaultSettings(), ...state.settings, autoClearDone: enabled };
+  }, { undoable: false, toast: enabled ? 'Done will be cleared each morning' : 'Auto-clear is off – use Clear when you want' });
+  if (enabled) {
+    lastAutoClearDay = null;
+    autoClearDone();
+  }
+}
+
+function openDoneMenu(x, y) {
+  const doneCount = state.tasks.filter(task => task.column === 'done').length;
+  const auto = Boolean(state.settings && state.settings.autoClearDone);
+  openContextMenu([
+    ...(doneCount ? [{ label: `Clear now (${doneCount})`, action: clearDone }] : []),
+    { label: `${auto ? '☑' : '☐'} Clear each morning automatically`, action: () => setAutoClear(!auto) },
+    null,
+    { label: 'Open archive', action: openArchive }
+  ], x, y);
 }
 
 function restoreFromArchive(archiveId) {
@@ -680,6 +748,9 @@ function renderBoard() {
   });
 
   clearDoneButton.hidden = !state.tasks.some(task => task.column === 'done');
+  clearDoneButton.title = state.settings && state.settings.autoClearDone
+    ? 'Archive these now (they also move to the archive automatically tomorrow morning). Right-click the header for options.'
+    : 'Move all Done tasks to the archive. Right-click the header to turn on clearing each morning.';
 }
 
 function renderArchiveButton() {
@@ -1446,49 +1517,170 @@ function openEditor(taskId) {
 
 function openArchive() {
   const modal = openModal({ kind: 'archive', title: 'Archive', className: 'modal-archive' });
+  modal.query = '';
+  modal.projectFilter = null;
   renderArchiveList(modal);
+  if (modal.searchInput) modal.searchInput.focus();
+}
+
+function archiveDayLabel(key) {
+  const today = dayKey(new Date());
+  const yesterday = dayKey(new Date(Date.now() - DAY_MS));
+  if (key === today) return 'Today';
+  if (key === yesterday) return 'Yesterday';
+  const [y, m, d] = key.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const sameYear = y === new Date().getFullYear();
+  return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+}
+
+// A project key for the archive filter: the live project, or a deleted one by name.
+function archiveProjectKey(item) {
+  return getProject(item.projectId) ? item.projectId : `deleted:${item.projectName || ''}`;
+}
+
+function archiveMatches(item, query) {
+  if (!query) return true;
+  const project = getProject(item.projectId);
+  const haystack = [item.text, item.notes, project ? project.name : item.projectName, project ? projectLabel(project.id) : '']
+    .join(' ').toLocaleLowerCase('sv');
+  return query.toLocaleLowerCase('sv').split(/\s+/).filter(Boolean).every(word => haystack.includes(word));
 }
 
 function renderArchiveList(modal) {
-  modal.body.replaceChildren();
   modal.footer.replaceChildren();
 
   if (state.archive.length === 0) {
-    modal.body.appendChild(make('p', 'modal-text',
-      'No archived tasks yet. Use “Clear” in the Done column to archive finished tasks.'));
-  } else {
-    const list = make('div', 'archive-list');
-
-    state.archive.forEach(item => {
-      const row = make('div', 'archive-item');
-
-      const dot = make('span', 'task-color-dot');
-      const project = getProject(item.projectId);
-      dot.style.background = project ? project.color : '#9aa5b1';
-
-      const info = make('div', 'archive-info');
-      info.appendChild(make('div', 'archive-text', item.text));
-      const projectName = project ? project.name : (item.projectName ? `${item.projectName} (deleted)` : '');
-      info.appendChild(make('div', 'archive-meta',
-        [projectName, `archived ${formatDate(item.archivedAt)}`].filter(Boolean).join(' · ')));
-      if (item.notes) {
-        const notes = make('div', 'archive-notes', item.notes);
-        info.appendChild(notes);
-      }
-
-      const restore = modalButton('Restore', '', () => restoreFromArchive(item.id));
-      restore.title = 'Put back in the Task Pool';
-      const remove = modalButton('Delete', 'button-danger-subtle', () => deleteFromArchive(item.id));
-
-      row.append(dot, info, restore, remove);
-      list.appendChild(row);
-    });
-
-    modal.body.appendChild(list);
-    modal.footer.appendChild(modalButton('Empty archive', 'button-danger-subtle', emptyArchive));
+    modal.body.replaceChildren(make('p', 'modal-text',
+      'No archived tasks yet. Finished tasks move here each morning, or when you press “Clear” in the Done column.'));
+    modal.searchInput = null;
+    modal.footer.append(make('span', 'modal-footer-spacer'), modalButton('Close', 'button-primary', () => closeModal()));
+    return;
   }
 
-  modal.footer.append(make('span', 'modal-footer-spacer'), modalButton('Close', 'button-primary', () => closeModal()));
+  // Controls are built once so the search field keeps focus and text while the list updates.
+  if (!modal.controls || !modal.body.contains(modal.controls)) {
+    modal.body.replaceChildren();
+    modal.controls = make('div', 'archive-controls');
+    modal.searchInput = document.createElement('input');
+    modal.searchInput.type = 'search';
+    modal.searchInput.className = 'archive-search';
+    modal.searchInput.placeholder = 'Search the archive…';
+    modal.searchInput.value = modal.query || '';
+    modal.searchInput.addEventListener('input', () => {
+      modal.query = modal.searchInput.value;
+      renderArchiveList(modal);
+    });
+    modal.filterRow = make('div', 'archive-filters');
+    modal.controls.append(modal.searchInput, modal.filterRow);
+    modal.results = make('div', 'archive-results');
+    modal.body.append(modal.controls, modal.results);
+  }
+
+  // Project filter chips: only projects that have archived tasks.
+  const projectKeys = [];
+  state.archive.forEach(item => {
+    const key = archiveProjectKey(item);
+    if (!projectKeys.includes(key)) projectKeys.push(key);
+  });
+  projectKeys.sort((a, b) => {
+    const index = key => {
+      const i = state.projects.findIndex(p => p.id === key);
+      return i < 0 ? 999 : i;
+    };
+    return index(a) - index(b);
+  });
+  if (modal.projectFilter && !projectKeys.includes(modal.projectFilter)) modal.projectFilter = null;
+
+  const chip = (key, labelText, color, title) => {
+    const button = make('button', 'archive-filter');
+    button.type = 'button';
+    button.title = title;
+    button.classList.toggle('selected', modal.projectFilter === key);
+    if (key) {
+      const tag = make('span', 'project-tag', labelText);
+      paintProjectTag(tag, color);
+      button.appendChild(tag);
+    } else {
+      button.textContent = labelText;
+    }
+    button.addEventListener('click', () => {
+      modal.projectFilter = modal.projectFilter === key ? null : key;
+      renderArchiveList(modal);
+    });
+    return button;
+  };
+  modal.filterRow.replaceChildren(
+    chip(null, 'All projects', null, 'Show every project'),
+    ...projectKeys.map(key => {
+      const project = getProject(key);
+      if (project) return chip(key, projectLabel(key), project.color, project.name);
+      const name = key.slice('deleted:'.length) || 'Unknown';
+      return chip(key, autoShortLabel(name), '#9aa5b1', `${name} (deleted)`);
+    })
+  );
+  if (!modal.projectFilter) modal.filterRow.firstChild.classList.add('selected');
+
+  // Results grouped by the day the task was finished.
+  const items = state.archive
+    .filter(item => !modal.projectFilter || archiveProjectKey(item) === modal.projectFilter)
+    .filter(item => archiveMatches(item, modal.query))
+    .sort((a, b) => String(b.doneAt || b.archivedAt).localeCompare(String(a.doneAt || a.archivedAt)));
+
+  modal.results.replaceChildren();
+  if (items.length === 0) {
+    modal.results.appendChild(make('p', 'modal-text archive-empty', 'No archived tasks match.'));
+  }
+
+  let currentDay = null;
+  let group = null;
+  items.forEach(item => {
+    const key = dayKey(item.doneAt || item.archivedAt);
+    if (key !== currentDay) {
+      currentDay = key;
+      const heading = make('div', 'archive-day');
+      heading.append(make('span', '', archiveDayLabel(key)));
+      heading.dataset.day = key;
+      group = make('div', 'archive-list');
+      modal.results.append(heading, group);
+    }
+    group.appendChild(createArchiveRow(item));
+    const count = group.childElementCount;
+    group.previousSibling.dataset.count = String(count);
+  });
+  modal.results.querySelectorAll('.archive-day').forEach(heading => {
+    heading.appendChild(make('span', 'archive-day-count', heading.dataset.count === '1' ? '1 task' : `${heading.dataset.count} tasks`));
+  });
+
+  const shown = items.length === state.archive.length ? `${items.length} archived` : `${items.length} of ${state.archive.length}`;
+  modal.footer.append(
+    modalButton('Empty archive', 'button-danger-subtle', emptyArchive),
+    make('span', 'archive-total', shown),
+    make('span', 'modal-footer-spacer'),
+    modalButton('Close', 'button-primary', () => closeModal())
+  );
+}
+
+function createArchiveRow(item) {
+  const row = make('div', 'archive-item');
+  const project = getProject(item.projectId);
+
+  const tag = make('span', 'project-tag', project ? projectLabel(project.id) : autoShortLabel(item.projectName || '?'));
+  paintProjectTag(tag, project ? project.color : '#9aa5b1');
+  tag.title = project ? project.name : `${item.projectName || 'Unknown project'} (deleted)`;
+
+  const info = make('div', 'archive-info');
+  info.appendChild(make('div', 'archive-text', item.text));
+  const projectName = project ? project.name : (item.projectName ? `${item.projectName} (deleted)` : '');
+  info.appendChild(make('div', 'archive-meta', [projectName, `archived ${formatDate(item.archivedAt)}`].filter(Boolean).join(' · ')));
+  if (item.notes) info.appendChild(make('div', 'archive-notes', item.notes));
+
+  const restore = modalButton('Restore', '', () => restoreFromArchive(item.id));
+  restore.title = 'Put back in the Task Pool';
+  const remove = modalButton('Delete', 'button-danger-subtle', () => deleteFromArchive(item.id));
+
+  row.append(tag, info, restore, remove);
+  return row;
 }
 
 function openShortcuts() {
@@ -1506,6 +1698,8 @@ function openShortcuts() {
     ['W', 'Mark as waiting for someone / no longer waiting'],
     ['E', 'Edit task and notes'],
     ['Right-click', 'Menu: waiting, edit, move, delete'],
+    ['', 'Right-click the Done header:'],
+    ['Right-click', 'Clear now, turn clearing each morning on/off, open the archive'],
     ['', 'Right-click a project header:'],
     ['Right-click', 'Rename, short label, colour, delete'],
     ['', 'With a card selected using the keyboard (Tab):'],
@@ -1830,6 +2024,10 @@ newProjectInput.addEventListener('keydown', event => {
 });
 
 clearDoneButton.addEventListener('click', clearDone);
+boardColumns.done.zone.querySelector('.column-header').addEventListener('contextmenu', event => {
+  event.preventDefault();
+  openDoneMenu(event.clientX, event.clientY);
+});
 archiveButton.addEventListener('click', openArchive);
 shortcutsButton.addEventListener('click', openShortcuts);
 
@@ -1866,11 +2064,16 @@ if (storage) {
     else if (command === 'redo') redo();
     else if (command === 'shortcuts') openShortcuts();
     else if (command === 'archive') openArchive();
+    else if (command === 'day-check') autoClearDone();
   });
 }
 
 setInterval(refreshWaitingBadges, 15 * 60 * 1000);
 window.addEventListener('focus', refreshWaitingBadges);
+
+// The app often stays open in the tray overnight, so look for a new day regularly.
+setInterval(autoClearDone, 60 * 1000);
+window.addEventListener('focus', autoClearDone);
 
 async function init() {
   let data = null;
@@ -1901,6 +2104,8 @@ async function init() {
   if (migrated && storage) {
     showToast('Your tasks now live in a data file (File → Open data folder).');
   }
+
+  autoClearDone();
 }
 
 init();
