@@ -10,9 +10,11 @@ This is Olle's personal Todo Kanban app: Electron, vanilla JS, no framework. Oll
 4. **Build the app code.** Run `npm run dist` and copy `dist/win-unpacked/resources/app.asar` to `..\todo-kanban-releases\<version>\app.asar`. Add a row to the README table in that folder.
 5. **Install.** Ask Olle to **quit** the app first (tray → Quit, or Ctrl+Q; the X only hides it to the tray). Then copy the asar to `%LOCALAPPDATA%\Programs\Todo Kanban\resources\app.asar`, and ask Olle to start the app and check.
 
-- **Rollback:** copy an older release's `app.asar` back into the install folder.
-- **When a new installer is needed:** only for a new Electron version or new installer settings. Windows' app list still says 1.0.0 because of this.
-- **Exe icon:** `Todo Kanban.exe` in the install folder was icon-patched. The original is kept next to it as `Todo Kanban.exe.orig-1.0.0`.
+- **Rollback:** copy an older release's `app.asar` back into the install folder. To go back to an older Electron runtime, run that release's installer first (kept in `..\todo-kanban-releases\<version>\` for installer releases).
+- **When a new installer is needed:** for a new Electron version or new installer settings. Keep the runtime on a supported Electron major: only the latest three get security fixes, roughly one new major every 8 weeks. Check every few months, and ship a new installer release (store the `Setup x.y.z.exe` next to the asar).
+- **Installing an installer release.** Olle quits the app, then runs `dist\Todo Kanban Setup x.y.z.exe /S` (silent, per-user, no admin rights). The data in `%APPDATA%` is kept.
+- **Fuses.** The packaged exe has RunAsNode, NODE_OPTIONS and `--inspect` turned off, so Playwright can't drive the installed app; test from source instead. ASAR integrity is deliberately off so the asar swap still works.
+- **npm allow-scripts.** npm warns about install scripts for `electron-winstaller` (not used for the NSIS target). Electron's own postinstall runs fine.
 
 ## Olle's preferences
 
@@ -27,7 +29,6 @@ This is Olle's personal Todo Kanban app: Electron, vanilla JS, no framework. Oll
 - Change the quick-add hotkey from inside the app (today it's `quickAddShortcut` in settings.json).
 - Show short project labels on the quick-add chips.
 - Set "waiting for" from quick add, and add an overview of everything being waited on.
-- Rebuild the installer so Windows shows the real version.
 
 ## Gotchas
 

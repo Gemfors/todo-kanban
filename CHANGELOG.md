@@ -3,6 +3,16 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.9.0 – 2026-11-04
+
+### Security
+- New Electron runtime: 45.2.2 (Chromium 156), up from 41.0.0 (out of support, eight months of browser-engine security fixes missing). This version needs the new installer once. The app itself works the same.
+- The program file is locked down with Electron fuses: it can no longer be used as a plain Node.js runner (`ELECTRON_RUN_AS_NODE`), and ignores `NODE_OPTIONS` and `--inspect` debugging flags. It only loads its code from `app.asar`.
+- Build tools updated (electron-builder 26.18). `npm audit` is down from 33 findings (1 critical, 17 high) to 15 moderate ones, all in build-time tools that don't ship with the app.
+
+### Changed
+- Windows' "Installed apps" list and the program file now show the real version. The kanban icon is built into `Todo Kanban.exe`, so the patched exe from 1.3.2 is no longer needed.
+
 ## 1.8.1 – 2026-11-04
 
 ### Security

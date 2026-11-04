@@ -1,6 +1,6 @@
 {
   "name": "todo-kanban",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -12,8 +12,8 @@
   "license": "ISC",
   "description": "Personal kanban board: Today board plus project task pool",
   "devDependencies": {
-    "electron": "^41.0.0",
-    "electron-builder": "^26.8.1",
+    "electron": "^45.2.2",
+    "electron-builder": "^26.18.0",
     "playwright": "^1.64.1"
   },
   "build": {
@@ -37,6 +37,14 @@
       "package.json"
     ],
     "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableCookieEncryption": true,
+      "onlyLoadAppFromAsar": true,
+      "enableEmbeddedAsarIntegrityValidation": false
+    },
     "win": {
       "target": [
         {
