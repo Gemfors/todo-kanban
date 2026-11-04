@@ -16,7 +16,8 @@ const SCENARIOS = [
   { name: 'win32', env: {} },
   { name: 'data', env: {} },
   { name: 'onedrive', env: { ONEDRIVE_FROM_UD: '1' } },
-  { name: 'theme', env: {} }
+  { name: 'theme', env: {} },
+  { name: 'security', env: {} }
 ];
 
 if (!process.env.MAIN_TEST_SCENARIO) {
@@ -67,6 +68,7 @@ S.ready();
 
 (function run() {
   const [main, qa] = S.windows;
+  const mainEv = { sender: main.webContents }, qaEv = { sender: qa.webContents };
   if (scenario==='normal') {
     assert(main.file==='index.html' && qa.file==='quickadd.html', 'two windows created');
     assert(main.visible, 'main window shown on normal start');
@@ -79,28 +81,28 @@ S.ready();
     const settings=JSON.parse(fs.readFileSync(ud+'/settings.json'));
     assert(settings.startWithWindows===true && settings.quickAddShortcut==='CommandOrControl+Alt+K', 'settings file written');
     // data save so projects are known
-    S.handlers['data:save'](null,{version:2,projects:[{id:'p1',name:'Work',color:'#ff0000',collapsed:false}],tasks:[],archive:[]});
+    S.handlers['data:save'](mainEv,{version:2,projects:[{id:'p1',name:'Work',color:'#ff0000',collapsed:false}],tasks:[],archive:[]});
     S.shortcuts['CommandOrControl+Alt+K']();
     assert(!qa.visible, 'waits for page to report its size');
-    S.on['quickadd:ready'](null, 186);
+    S.on['quickadd:ready'](qaEv, 186);
     assert(qa.visible && qa.bounds.height===186, 'shown at reported height');
     assert(qa.menu===null, 'no app menu in quick add');
-    S.on['quickadd:resize'](null, 5000); assert(qa.bounds.height===420, 'height clamped');
-    S.on['quickadd:resize'](null, 186);
+    S.on['quickadd:resize'](qaEv, 5000); assert(qa.bounds.height===420, 'height clamped');
+    S.on['quickadd:resize'](qaEv, 186);
     const open=qa.webContents.sent.find(s=>s[0]==='quickadd:open');
     assert(open && open[1].projects[0].name==='Work' && open[1].projects[0].color==='#ff0000', 'quick add gets projects');
     assert(qa.bounds.x===1920+Math.round((2560-640)/2) && qa.bounds.y===Math.round(1440*0.22), 'opens on the monitor with the cursor');
-    S.on['quickadd:submit'](null,{text:'  Hello  ',projectId:'p1',column:'todo',keepOpen:true});
+    S.on['quickadd:submit'](qaEv,{text:'  Hello  ',projectId:'p1',column:'todo',keepOpen:true});
     const fwd=main.webContents.sent.find(s=>s[0]==='quickadd:task');
     assert(fwd && fwd[1].text==='Hello' && fwd[1].column==='todo' && fwd[1].projectId==='p1', 'task forwarded to main window');
     assert(qa.visible, 'keepOpen keeps box open');
-    S.on['quickadd:submit'](null,{text:'Bye',projectId:'p1',column:'weird'});
+    S.on['quickadd:submit'](qaEv,{text:'Bye',projectId:'p1',column:'weird'});
     assert(main.webContents.sent.filter(s=>s[0]==='quickadd:task')[1][1].column==='pool', 'bad column -> pool');
     assert(!qa.visible, 'Enter closes box');
-    S.on['quickadd:submit'](null,{text:'   '}); assert(main.webContents.sent.filter(s=>s[0]==='quickadd:task').length===2, 'empty ignored');
+    S.on['quickadd:submit'](qaEv,{text:'   '}); assert(main.webContents.sent.filter(s=>s[0]==='quickadd:task').length===2, 'empty ignored');
     assert(JSON.parse(fs.readFileSync(ud+'/settings.json')).lastQuickAddProjectId==='p1', 'last project remembered');
-    S.shortcuts['CommandOrControl+Alt+K'](); S.on['quickadd:ready'](null,186); qa.emit('blur'); assert(!qa.visible, 'blur hides box');
-    S.shortcuts['CommandOrControl+Alt+K'](); S.on['quickadd:ready'](null,186); S.on['quickadd:close'](); assert(!qa.visible, 'Esc hides box');
+    S.shortcuts['CommandOrControl+Alt+K'](); S.on['quickadd:ready'](qaEv,186); qa.emit('blur'); assert(!qa.visible, 'blur hides box');
+    S.shortcuts['CommandOrControl+Alt+K'](); S.on['quickadd:ready'](qaEv,186); S.on['quickadd:close'](qaEv); assert(!qa.visible, 'Esc hides box');
     // close to tray
     const prevented=main.close();
     assert(prevented && !main.visible, 'closing hides to tray');
@@ -126,6 +128,8 @@ S.ready();
   }
   if (scenario==='dev') {
     assert(S.login===null, 'npm start does not register autostart');
+    const view = S.menu.find(m => m.label === 'View').submenu;
+    assert(view.some(i => i.role === 'toggleDevTools') && view.some(i => i.role === 'reload'), 'npm start keeps Reload and DevTools in the menu');
   }
 
   if (scenario === 'win32') {
@@ -134,32 +138,76 @@ S.ready();
     assert(main.appDetails.appIconPath.endsWith(path.join('icons', 'todo-kanban-icon-v2.ico')), 'relaunch icon is the copied icon file');
     assert(fs.existsSync(path.join(ud, 'icons', 'todo-kanban-icon-v2.ico')), 'icon copied to the data folder');
     assert(main.opts.icon === main.appDetails.appIconPath && S.tray.icon === main.appDetails.appIconPath, 'window, tray and taskbar share the icon');
+    const legacy = S.logins.filter(o => o.name === 'com.olle.todo-kanban');
+    assert(legacy.length === 1 && legacy[0].openAtLogin === false, 'old startup entry (pre-1.3.3 app id) is removed');
+    assert(S.login.name === 'com.olle.todo-kanban.board' && S.login.openAtLogin === true, 'current startup entry uses the board app id');
   }
   if (scenario === 'data') {
-    assert(S.handlers['data:load']() === null, 'no data file yet');
+    assert(S.handlers['data:load'](mainEv) === null, 'no data file yet');
     const d = { version: 2, projects: [{ id: 'a', name: 'W' }], tasks: [{ id: 't', text: 'x', projectId: 'a', column: 'pool' }], archive: [] };
-    S.handlers['data:save'](null, d);
+    S.handlers['data:save'](mainEv, d);
     d.tasks.push({ id: 'u', text: 'y', projectId: 'a', column: 'todo' });
-    S.handlers['data:save'](null, d);
-    assert(S.handlers['data:load']().tasks.length === 2, 'save + load round trip');
+    S.handlers['data:save'](mainEv, d);
+    assert(S.handlers['data:load'](mainEv).tasks.length === 2, 'save + load round trip');
     assert(JSON.parse(fs.readFileSync(path.join(ud, 'kanban-data.bak.json'))).tasks.length === 1, 'previous version kept as .bak');
     assert(fs.readdirSync(path.join(ud, 'backups')).length === 1, 'daily backup written');
     let rejected = false;
-    try { S.handlers['data:save'](null, { foo: 1 }); } catch { rejected = true; }
+    try { S.handlers['data:save'](mainEv, { foo: 1 }); } catch { rejected = true; }
     assert(rejected, 'invalid data refused');
     fs.writeFileSync(path.join(ud, 'kanban-data.json'), '{broken');
-    assert(S.handlers['data:load']().tasks.length === 1, 'corrupt file falls back to .bak');
+    assert(S.handlers['data:load'](mainEv).tasks.length === 1, 'corrupt file falls back to .bak');
   }
-  if (scenario === 'normal') {
+  if (scenario === 'security') {
     S.external = [];
-    assert(S.handlers['link:open'](null, 'https://hiq.se/x') === true && S.external[0] === 'https://hiq.se/x', 'web links open in the browser');
-    assert(S.handlers['link:open'](null, 'file:///C:/Windows/system32/calc.exe') === false && S.handlers['link:open'](null, 'javascript:alert(1)') === false, 'other schemes are refused');
+    assert(S.handlers['link:open'](mainEv, 'https://hiq.se/x') === true && S.external[0] === 'https://hiq.se/x', 'web links open in the browser');
+    assert(S.handlers['link:open'](mainEv, 'file:///C:/Windows/system32/calc.exe') === false && S.handlers['link:open'](mainEv, 'javascript:alert(1)') === false, 'other schemes are refused');
+    assert(S.handlers['link:open'](mainEv, 'ms-msdt:/id x') === false && S.handlers['link:open'](mainEv, '\\\\server\\share\\x.exe') === false, 'ms-msdt and UNC paths are refused');
     assert(S.external.length === 1, 'nothing else was opened');
+    S.handlers['link:open'](mainEv, '  https://Example.com/a b  ');
+    assert(S.external[1] === 'https://example.com/a%20b', 'the checked, normalised URL is what gets opened: ' + S.external[1]);
     const opened = main.webContents.openHandler({ url: 'https://example.com' });
-    assert(opened.action === 'deny' && S.external[1] === 'https://example.com', 'new windows are denied, link goes to the browser');
+    assert(opened.action === 'deny' && S.external[2] === 'https://example.com/', 'new windows are denied, link goes to the browser');
+    assert(main.webContents.openHandler({ url: 'file:///C:/x.exe' }).action === 'deny' && S.external.length === 3, 'new windows with other schemes are denied and not opened');
     let prevented = false;
     main.webContents.ev['will-navigate']({ preventDefault() { prevented = true; } }, 'https://evil.example');
     assert(prevented, 'the board window never navigates away');
+
+    // The quick-add window is locked down the same way.
+    assert(qa.webContents.openHandler && qa.webContents.openHandler({ url: 'https://example.com' }).action === 'deny', 'quick add: new windows denied');
+    prevented = false;
+    qa.webContents.ev['will-navigate']({ preventDefault() { prevented = true; } }, 'https://evil.example');
+    assert(prevented, 'quick add never navigates away');
+    for (const win of [main, qa]) {
+      let blocked = false;
+      win.webContents.ev['will-attach-webview']({ preventDefault() { blocked = true; } });
+      const p = win.opts.webPreferences;
+      assert(blocked && p.sandbox === true && p.contextIsolation === true && p.nodeIntegration === false && p.webviewTag === false && p.webSecurity === true,
+        `${win.file}: sandboxed, isolated, no Node, no webviews`);
+    }
+
+    // IPC only from our own windows.
+    const stranger = { sender: { stranger: true } };
+    const before = S.external.length;
+    assert(S.handlers['link:open'](stranger, 'https://example.com') === false && S.external.length === before, 'link:open refused from an unknown sender');
+    assert(S.handlers['data:load'](stranger) === null, 'data:load refused from an unknown sender');
+    let refused = false;
+    try { S.handlers['data:save'](stranger, { projects: [], tasks: [] }); } catch { refused = true; }
+    assert(refused && !fs.existsSync(path.join(ud, 'kanban-data.json')), 'data:save refused from an unknown sender');
+    assert(S.handlers['data:load'](qaEv) === null, 'the quick-add window cannot read the board data');
+    S.on['quickadd:submit'](mainEv, { text: 'from the wrong window', column: 'todo' });
+    S.on['quickadd:submit'](stranger, { text: 'from a stranger', column: 'todo' });
+    assert(!main.webContents.sent.some(s => s[0] === 'quickadd:task'), 'quickadd:submit refused unless it comes from the quick-add window');
+
+    // Permissions: everything is refused.
+    let granted = null;
+    S.permissionRequest(main.webContents, 'media', g => { granted = g; });
+    assert(granted === false && S.permissionCheck(main.webContents, 'notifications') === false, 'camera/mic/notification permissions refused');
+
+    // Installed app: no Reload / DevTools in the menu.
+    const view = S.menu.find(m => m.label === 'View').submenu;
+    assert(!view.some(i => i.role === 'toggleDevTools' || i.role === 'reload'), 'installed app has no Reload/DevTools menu items');
+    assert(view.filter(i => i.type === 'separator').length === 3, 'no double separators left in the View menu');
+
     const file = S.menu.find(m => m.label === 'File').submenu;
     assert(file.find(i => i.label === 'Daily backup to OneDrive').enabled === false, 'no OneDrive found -> backup option disabled');
   }
@@ -172,14 +220,14 @@ S.ready();
     const now = new Date();
     const todayFile = path.join(dir, `kanban-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`);
     const d = { version: 2, projects: [{ id: 'a', name: 'W' }], tasks: [{ id: 't', text: 'first', projectId: 'a', column: 'pool' }], archive: [] };
-    S.handlers['data:save'](null, d);
+    S.handlers['data:save'](mainEv, d);
     assert(fs.existsSync(todayFile), 'daily copy written to OneDrive (Documents/Todo Kanban backups)');
     assert(JSON.parse(fs.readFileSync(todayFile)).tasks[0].text === 'first', 'copy has the data');
     const dated = fs.readdirSync(dir).filter(n => /^kanban-\d{4}-\d{2}-\d{2}\.json$/.test(n));
     assert(dated.length === 30, 'keeps the last 30 days: ' + dated.length);
     assert(fs.readdirSync(dir).some(n => n.endsWith('-1.json')), 'leaves other files alone');
     d.tasks[0].text = 'second';
-    S.handlers['data:save'](null, d);
+    S.handlers['data:save'](mainEv, d);
     assert(JSON.parse(fs.readFileSync(todayFile)).tasks[0].text === 'first', 'not rewritten on every save (at most hourly)');
     S.appEvents['before-quit']();
     assert(JSON.parse(fs.readFileSync(todayFile)).tasks[0].text === 'second', 'latest state written when quitting');
@@ -188,7 +236,7 @@ S.ready();
     assert(toggle.enabled && toggle.checked, 'OneDrive option on by default');
     toggle.click({ checked: false });
     fs.rmSync(todayFile);
-    S.handlers['data:save'](null, d);
+    S.handlers['data:save'](mainEv, d);
     assert(!fs.existsSync(todayFile), 'turning it off stops the copies');
     assert(JSON.parse(fs.readFileSync(path.join(ud, 'settings.json'))).oneDriveBackup === false, 'setting remembered');
     S.power.resume();

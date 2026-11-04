@@ -34,4 +34,6 @@ This is Olle's personal Todo Kanban app: Electron, vanilla JS, no framework. Oll
 - **Single-instance lock.** Two running instances would overwrite each other's data file.
 - **Taskbar app id.** The window uses `com.olle.todo-kanban.board`, deliberately different from the installer appId, so the taskbar shows the kanban icon.
 - **Old data migration.** Data from before 1.1 lived in renderer localStorage. `readLegacyLocalStorage` in `script.js` still migrates it.
-- **Playwright for tests.** The browser tests need Playwright with Chromium, which isn't a dependency. Set `PLAYWRIGHT_MODULE` if `require('playwright')` fails.
+- **Playwright for tests.** Playwright is a dev dependency; run `npx playwright install chromium` once after `npm install`.
+- **Never touch the real data from a source run.** `npm start` uses the same data folder as the installed app (`%APPDATA%\todo-kanban`). Set `TODO_KANBAN_DATA_DIR` to a scratch folder for manual or Playwright-driven runs. The `APPDATA` variable does **not** redirect Electron.
+- **Security baseline (1.8.1).** Windows are sandboxed and locked down (`SECURE_WEB_PREFERENCES`, `lockDownWindow`), every IPC handler checks its sender (`isFrom`), and all permissions are denied. New windows and new IPC channels must follow the same pattern.

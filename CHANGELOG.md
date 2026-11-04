@@ -3,6 +3,23 @@
 All notable changes to Todo Kanban. Versions follow semantic versioning:
 patch = bug fixes, minor = new features, major = changes that break the data format.
 
+## 1.8.1 – 2026-11-04
+
+### Security
+- Both windows run sandboxed, with web views turned off and web security explicitly on. Before, the sandbox was only on by default.
+- The quick-add window can no longer navigate away or open new windows, the same as the board window already couldn't.
+- Camera, microphone, location, notification and other permission requests are refused.
+- Messages to the main process are only accepted from the app's own windows. The quick-add window can no longer read the board data.
+- Links are opened exactly as they were checked (the normalised http/https address), never the raw text.
+- Reload and DevTools are hidden in the installed app (still there with `npm start`).
+
+### Fixed
+- File → Start with Windows can now really turn off starting with Windows. An old startup entry from 1.2.0 (from before the taskbar fix) kept starting the app and is now removed.
+
+### Developer
+- Playwright is now a dev dependency, so `npm test` runs every suite without extra setup.
+- `TODO_KANBAN_DATA_DIR` points a source run (`npm start`, tests) at a scratch data folder. The installed app ignores it.
+
 ## 1.8.0 – 2026-10-06
 
 ### Added

@@ -13,7 +13,7 @@ class Tray { constructor(icon){ this.icon=icon; S.tray=this; this.ev={}; } on(e,
 module.exports = {
   app: { getPath: k => process.env.MOCK_UD + (k==='userData' ? '' : '/docs'), getVersion: () => 'test', get isPackaged(){ return S.packaged; },
     requestSingleInstanceLock: () => true, quit(){ S.quit=true; }, on(e,cb){ const prev=S.appEvents[e]; S.appEvents[e] = prev ? (...a)=>{ prev(...a); cb(...a); } : cb; }, whenReady(){ return { then(cb){ S.ready=cb; } }; },
-    setLoginItemSettings(o){ S.login=o; }, setAppUserModelId(id){ S.aumid=id; } },
+    setLoginItemSettings(o){ (S.logins ||= []).push(o); S.login=o; }, setAppUserModelId(id){ S.aumid=id; } },
   BrowserWindow: BW, Tray,
   Menu: { buildFromTemplate: t => t, setApplicationMenu: m => { S.menu = m; } },
   dialog: { showMessageBox: async (...a) => { S.dialogs.push(a[a.length-1]); return {response:1}; }, showErrorBox(){} },
@@ -21,6 +21,7 @@ module.exports = {
   ipcMain: { handle: (c, fn) => { S.handlers[c] = fn; }, on: (c, fn) => { S.on[c] = fn; } },
   screen: { getAllDisplays: () => [{ workArea: { x:0, y:0, width:1920, height:1080 } }], getCursorScreenPoint: () => ({x:2500,y:100}),
     getDisplayNearestPoint: () => ({ workArea: { x:1920, y:0, width:2560, height:1440 } }) },
+  session: { defaultSession: { setPermissionRequestHandler(fn){ S.permissionRequest=fn; }, setPermissionCheckHandler(fn){ S.permissionCheck=fn; } } },
   shell: { openPath(p){ S.opened = p; }, openExternal(u){ (S.external ||= []).push(u); } },
   powerMonitor: { on(e, cb){ (S.power ||= {})[e] = cb; } },
   nativeTheme: S.nativeTheme = {

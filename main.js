@@ -3,7 +3,13 @@ const path = require('path');
 const {
   app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, screen, shell
 } = require('electron');
-const { powerMonitor, nativeTheme } = require('electron');
+const { powerMonitor, nativeTheme, session } = require('electron');
+
+// When running from source (npm start / tests), TODO_KANBAN_DATA_DIR points the app at a scratch
+// data folder so a test run never touches the real board. Ignored by the installed app.
+if (!app.isPackaged && process.env.TODO_KANBAN_DATA_DIR) {
+  app.setPath('userData', process.env.TODO_KANBAN_DATA_DIR);
+}
 
 const userDataDir = app.getPath('userData');
 const stateFile = path.join(userDataDir, 'window-state.json');
@@ -20,6 +26,9 @@ const ONEDRIVE_REFRESH_MS = 60 * 60 * 1000; // refresh today's OneDrive copy at 
 // taskbar matched the window to the Start-menu shortcut and kept showing the icon it had
 // cached for it (Electron's atom). With its own id the window's own icon is used.
 const APP_ID = 'com.olle.todo-kanban.board';
+// Startup entry written by 1.2.0–1.3.2, before APP_ID changed. Removed on start so that
+// File → Start with Windows really controls whether the app starts.
+const LEGACY_LOGIN_ITEM_NAME = 'com.olle.todo-kanban';
 const ICON_FILE_NAME = 'todo-kanban-icon-v2.ico'; // new name = nothing cached for it yet
 const DEFAULT_QUICK_ADD_SHORTCUT = 'CommandOrControl+Alt+K';
 const QUICK_ADD_WIDTH = 640;
@@ -278,24 +287,71 @@ function saveData(data) {
   writeOneDriveBackup(content);
 }
 
-ipcMain.handle('data:load', () => loadData());
+/* ---------- Security helpers ---------- */
 
 // Links from notes open in the default browser – only web links, never files or other schemes.
-function isWebLink(url) {
+// Returns the parsed, normalised URL so that exactly what was checked is what gets opened.
+function webLinkHref(url) {
   try {
     const parsed = new URL(String(url));
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-ipcMain.handle('link:open', (_event, url) => {
-  if (!isWebLink(url)) return false;
-  shell.openExternal(String(url));
+function isWebLink(url) {
+  return webLinkHref(url) !== null;
+}
+
+function openWebLink(url) {
+  const href = webLinkHref(url);
+  if (!href) return false;
+  shell.openExternal(href);
   return true;
+}
+
+// IPC messages are only accepted from our own windows' web contents.
+function isFrom(event, win) {
+  return Boolean(event && win && !win.isDestroyed() && event.sender === win.webContents);
+}
+
+// Both windows only ever show our own local pages: no navigation, no new windows.
+function lockDownWindow(win) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openWebLink(url);
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    openWebLink(url);
+  });
+  win.webContents.on('will-attach-webview', event => event.preventDefault());
+}
+
+// The app never needs camera, microphone, location, notifications etc.: refuse them all.
+function denyAllPermissions() {
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  ses.setPermissionCheckHandler(() => false);
+}
+
+const SECURE_WEB_PREFERENCES = {
+  nodeIntegration: false,
+  contextIsolation: true,
+  sandbox: true,
+  webSecurity: true,
+  webviewTag: false
+};
+
+ipcMain.handle('data:load', event => (isFrom(event, mainWindow) ? loadData() : null));
+
+ipcMain.handle('link:open', (event, url) => {
+  if (!isFrom(event, mainWindow)) return false;
+  return openWebLink(url);
 });
-ipcMain.handle('data:save', (_event, data) => {
+ipcMain.handle('data:save', (event, data) => {
+  if (!isFrom(event, mainWindow)) throw new Error('Refusing to save from an unknown sender');
   saveData(data);
   return true;
 });
@@ -382,12 +438,12 @@ function createQuickAddWindow() {
     backgroundColor: windowBackground(),
     icon: windowIconPath(),
     webPreferences: {
-      preload: path.join(__dirname, 'quickadd-preload.js'),
-      nodeIntegration: false,
-      contextIsolation: true
+      ...SECURE_WEB_PREFERENCES,
+      preload: path.join(__dirname, 'quickadd-preload.js')
     }
   });
 
+  lockDownWindow(quickAddWindow);
   quickAddWindow.setAlwaysOnTop(true, 'screen-saver');
   quickAddWindow.setMenu(null); // no app-menu shortcuts (Ctrl+W, Alt+F…) inside the box
   quickAddWindow.loadFile('quickadd.html');
@@ -451,18 +507,20 @@ function showQuickAdd() {
   }
 }
 
-ipcMain.on('quickadd:ready', (_event, height) => {
+ipcMain.on('quickadd:ready', (event, height) => {
+  if (!isFrom(event, quickAddWindow)) return;
   if (pendingQuickAddShow) pendingQuickAddShow(height);
 });
 
-ipcMain.on('quickadd:resize', (_event, height) => {
-  if (!quickAddWindow || quickAddWindow.isDestroyed()) return;
+ipcMain.on('quickadd:resize', (event, height) => {
+  if (!isFrom(event, quickAddWindow)) return;
   quickAddHeight = clampQuickAddHeight(height);
   const bounds = quickAddWindow.getBounds();
   quickAddWindow.setBounds({ ...bounds, height: quickAddHeight });
 });
 
-ipcMain.on('quickadd:submit', (_event, task) => {
+ipcMain.on('quickadd:submit', (event, task) => {
+  if (!isFrom(event, quickAddWindow)) return;
   const text = task && typeof task.text === 'string' ? task.text.trim() : '';
   if (!text || !mainWindow) return;
 
@@ -479,8 +537,9 @@ ipcMain.on('quickadd:submit', (_event, task) => {
   if (!task.keepOpen && quickAddWindow) quickAddWindow.hide();
 });
 
-ipcMain.on('quickadd:close', () => {
-  if (quickAddWindow) quickAddWindow.hide();
+ipcMain.on('quickadd:close', event => {
+  if (!isFrom(event, quickAddWindow)) return;
+  quickAddWindow.hide();
 });
 
 function registerQuickAddShortcut() {
@@ -549,8 +608,23 @@ function applyStartWithWindows() {
   app.setLoginItemSettings({
     openAtLogin: Boolean(settings.startWithWindows),
     path: process.execPath,
-    args: ['--hidden']
+    args: ['--hidden'],
+    name: APP_ID
   });
+}
+
+function removeLegacyLoginItem() {
+  if (!app.isPackaged || process.platform !== 'win32') return;
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: false,
+      path: process.execPath,
+      args: ['--hidden'],
+      name: LEGACY_LOGIN_ITEM_NAME
+    });
+  } catch (err) {
+    console.error('Could not remove the old startup entry', err);
+  }
 }
 
 function setStartWithWindows(enabled) {
@@ -667,9 +741,12 @@ function buildMenu() {
             click: () => setTheme(value)
           }))
         },
-        { type: 'separator' },
-        { role: 'reload' },
-        { role: 'toggleDevTools' },
+        // Reload and DevTools only when running from source (npm start), not in the installed app.
+        ...(app.isPackaged ? [] : [
+          { type: 'separator' },
+          { role: 'reload' },
+          { role: 'toggleDevTools' }
+        ]),
         { type: 'separator' },
         { role: 'resetZoom' },
         { role: 'zoomIn' },
@@ -762,9 +839,8 @@ function createWindow() {
     title: `Todo Kanban ${app.getVersion()}`,
     icon: windowIconPath(),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: false,
-      contextIsolation: true
+      ...SECURE_WEB_PREFERENCES,
+      preload: path.join(__dirname, 'preload.js')
     }
   });
 
@@ -783,14 +859,7 @@ function createWindow() {
   }
 
   // Never navigate the board window away or open new windows; web links go to the browser.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isWebLink(url)) shell.openExternal(url);
-    return { action: 'deny' };
-  });
-  mainWindow.webContents.on('will-navigate', (event, url) => {
-    event.preventDefault();
-    if (isWebLink(url)) shell.openExternal(url);
-  });
+  lockDownWindow(mainWindow);
 
   // Keep the version in the title bar instead of the page's <title>.
   mainWindow.on('page-title-updated', event => event.preventDefault());
@@ -832,6 +901,8 @@ app.whenReady().then(() => {
   saveSettings();
   applyTheme();
   watchTheme();
+  denyAllPermissions();
+  removeLegacyLoginItem();
   applyStartWithWindows();
 
   createTray();
